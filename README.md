@@ -5,7 +5,8 @@
 [![.NET](https://img.shields.io/badge/.NET-8.0--windows-purple.svg?logo=dotnet)](https://dotnet.microsoft.com/)
 [![WebView2](https://img.shields.io/badge/Renderer-Microsoft%20WebView2-green.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Author](https://img.shields.io/badge/Author-MOYUNXUAN4-orange.svg)]()
+[![Author](https://img.shields.io/badge/Author-MOYUNXUAN-orange.svg)]()
+[![Email](https://img.shields.io/badge/Email-moyunxuan0%40gmail.com-blue?logo=gmail)](mailto:moyunxuan0@gmail.com)
 
 ---
 
@@ -134,6 +135,7 @@ CodexPet 遵循 Windows 标准数据规范，所有本地持久化配置均独�
 
 ## 👨‍💻 作者与开源许可 (Author & License)
 
-- **作者 / 开发者 (Author)**：**MOYUNXUAN4**
+- **作者 / 开发者 (Author)**：**MOYUNXUAN**
+- **联系邮箱 (Email)**：[moyunxuan0@gmail.com](mailto:moyunxuan0@gmail.com)
 - **开源协议 (License)**：本项目采用 [MIT License](LICENSE) 开源。欢迎自由使用、学习、修改与提交 Pull Request！
 - **GitHub 仓库**：[https://github.com/MOYUNXUAN4/CodexPet](https://github.com/MOYUNXUAN4/CodexPet)
