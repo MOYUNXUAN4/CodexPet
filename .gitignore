@@ -1,0 +1,16 @@
+# Build and compiler outputs
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio / Rider / VSCode
+.vs/
+.idea/
+.vscode/
+
+# Logs and temp files
+*.log
+*.tmp
