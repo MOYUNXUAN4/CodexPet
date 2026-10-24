@@ -4,6 +4,7 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,7 +35,27 @@ public sealed class MainForm : Form
     private readonly CancellationTokenSource _cts = new();
     private bool _ready;
     private bool _applying;
+    private bool _hotkeyOk;
+    private string _hotkeyText = "Ctrl+Alt+P";
     private CoreWebView2 _core;
+
+    /* ---------------- 全局热键 ---------------- */
+    private const int WmHotkey = 0x0312;
+    private const int HotkeyToggle = 0x0B01;
+    private const uint ModAlt = 0x0001;
+    private const uint ModControl = 0x0002;
+    private const uint ModShift = 0x0004;
+    private const uint ModNoRepeat = 0x4000;
+    private const uint VkP = 0x50;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    private static readonly Color MenuBack = Color.FromArgb(0x16, 0x1B, 0x24);
+    private static readonly Color MenuFore = Color.FromArgb(0xDD, 0xE6, 0xF2);
 
     public MainForm(DataService data, PetConfig cfg, string captureBase, string dumpPath = null)
     {
@@ -60,7 +81,7 @@ public sealed class MainForm : Form
         Controls.Add(_webView);
 
         _saveTimer = new System.Windows.Forms.Timer { Interval = 400 };
-        _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); ConfigStore.Save(_cfg); };
+        _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); if (!Ephemeral) ConfigStore.Save(_cfg); };
 
         _tray = BuildTray();
         _data.Changed += OnDataChanged;
@@ -69,6 +90,9 @@ public sealed class MainForm : Form
     }
 
     private double UiScale => DeviceDpi / 96.0;
+
+    // 截图 / 导出实例只借用界面，绝不能把布局写回用户配置
+    private bool Ephemeral => _captureBase != null || _dumpPath != null;
 
     private void OnLoad(object sender, EventArgs e)
     {
@@ -91,7 +115,21 @@ public sealed class MainForm : Form
         }
         SetBounds(x, y, w, h);
         ApplyRoundedRegion();
+        try { RegisterHotkeys(); }
+        catch (Exception ex) { Log.Write("hotkey: " + ex.Message); }
         Log.Write($"load bounds={x},{y} {w}x{h} dpi={DeviceDpi}");
+        if (Ephemeral)
+        {
+            // 复用用户配置会让截图结果受上次布局影响（比如上次折叠着退出），这里统一归位
+            _data.State.Collapsed = false;
+            _data.State.Expanded = false;
+            _data.State.CurveOpen = false;
+            _data.State.MonthOpen = false;
+            _data.State.HeatOpen = false;
+            _data.State.PetClosed = false;
+            _data.State.Mode = "codex";
+            Log.Write("ephemeral run: view state reset");
+        }
         InitWebViewAsync();
         _ = _data.StartAsync(_cts.Token);
     }
@@ -127,6 +165,11 @@ public sealed class MainForm : Form
         {
             _clickLogs++;
             Log.Write("click-hit #" + _clickLogs);
+        }
+        if (m.Msg == WmHotkey && m.WParam.ToInt32() == HotkeyToggle)
+        {
+            Log.Write("hotkey fired");
+            ToggleCollapse();
         }
     }
 
@@ -321,6 +364,14 @@ public sealed class MainForm : Form
                 case "open-external":
                     if (args.ValueKind == JsonValueKind.String) OpenUrl(args.GetString());
                     break;
+
+                case "open-session":
+                    OpenSession(args.ValueKind == JsonValueKind.String ? args.GetString() : null);
+                    break;
+
+                case "menu":
+                    ShowContextMenu(args);
+                    break;
             }
         }
         catch (Exception ex) { Log.Write("msg: " + ex.Message); }
@@ -345,7 +396,7 @@ public sealed class MainForm : Form
     {
 
         if (_applying) return;
-        var target = (int)Math.Round(Math.Clamp(cssHeight, 120, 760) * UiScale);
+        var target = (int)Math.Round(Math.Clamp(cssHeight, 24, 900) * UiScale);
         if (target <= 0 || Math.Abs(Height - target) < 1) return;
 
         _applying = true;
@@ -373,11 +424,23 @@ public sealed class MainForm : Form
             _data.State.Expanded = ex.GetBoolean();
         if (args.TryGetProperty("curveOpen", out var cv) && cv.ValueKind is JsonValueKind.True or JsonValueKind.False)
             _data.State.CurveOpen = cv.GetBoolean();
+        if (args.TryGetProperty("monthOpen", out var mo) && mo.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            _data.State.MonthOpen = mo.GetBoolean();
+        if (args.TryGetProperty("heatOpen", out var ho) && ho.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            _data.State.HeatOpen = ho.GetBoolean();
+        if (args.TryGetProperty("petClosed", out var pc) && pc.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            _data.State.PetClosed = pc.GetBoolean();
+        if (args.TryGetProperty("collapsed", out var co) && co.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            _data.State.Collapsed = co.GetBoolean();
 
         _cfg.Mode = _data.State.Mode;
         _cfg.Expanded = _data.State.Expanded;
         _cfg.CurveOpen = _data.State.CurveOpen;
-        ConfigStore.Save(_cfg);
+        _cfg.MonthOpen = _data.State.MonthOpen;
+        _cfg.HeatOpen = _data.State.HeatOpen;
+        _cfg.PetClosed = _data.State.PetClosed;
+        _cfg.Collapsed = _data.State.Collapsed;
+        if (!Ephemeral) ConfigStore.Save(_cfg);
 
         if (_data.State.Mode == "antigravity" && _data.State.Antigravity == null) await _data.FetchAgAsync();
         if (_data.State.Mode == "workbuddy" && _data.State.Wb == null) _data.CollectWb();
@@ -386,6 +449,173 @@ public sealed class MainForm : Form
     private void OpenUrl(string url)
     {
         try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+    }
+
+    /* ---------------- 右键菜单 / 热键 ---------------- */
+
+    // Ctrl+Alt+P 可能被别的软件占了，按顺序往后试几个等价组合
+    private void RegisterHotkeys()
+    {
+        var candidates = new (uint Mod, uint Vk, string Text)[]
+        {
+            (ModControl | ModAlt | ModNoRepeat, VkP, "Ctrl+Alt+P"),
+            (ModControl | ModAlt | ModNoRepeat, 0x4F, "Ctrl+Alt+O"),
+            (ModControl | ModShift | ModNoRepeat, VkP, "Ctrl+Shift+P"),
+            (ModAlt | ModShift | ModNoRepeat, VkP, "Alt+Shift+P"),
+        };
+        foreach (var c in candidates)
+        {
+            var ok = RegisterHotKey(Handle, HotkeyToggle, c.Mod, c.Vk);
+            var err = ok ? 0 : Marshal.GetLastWin32Error();
+            Log.Write($"hotkey {c.Text} = {ok} err={err}");
+            if (ok)
+            {
+                _hotkeyOk = true;
+                _hotkeyText = c.Text;
+                return;
+            }
+        }
+        Log.Write("hotkey: all combos taken, 全局热键不可用");
+    }
+
+    private void ToggleCollapse()
+    {
+        try
+        {
+            if (!Visible) { Show(); return; }
+            _core?.ExecuteScriptAsync("if(typeof applyCollapsed==='function')applyCollapsed(!collapsed,true)");
+        }
+        catch (Exception ex) { Log.Write("toggle: " + ex.Message); }
+    }
+
+    private static string ModeName(string mode) => mode switch
+    {
+        "antigravity" => "ANTIGRAVITY",
+        "workbuddy" => "WORKBUDDY",
+        _ => "CODEX"
+    };
+
+    private void ShowContextMenu(JsonElement args)
+    {
+        try
+        {
+            var st = _data.State;
+            var mode = st.Mode ?? "codex";
+            var menu = new ContextMenuStrip
+            {
+                BackColor = MenuBack,
+                ForeColor = MenuFore,
+                ShowImageMargin = false,
+                Font = new Font("Microsoft YaHei UI", 9f),
+                Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors())
+            };
+
+            var headText = ModeName(mode);
+            var model = mode == "codex" ? st.Session?.Model : mode == "workbuddy" ? st.Wb?.Model : null;
+            if (!string.IsNullOrEmpty(model)) headText += "  ·  " + model.Replace('-', ' ').Replace('_', ' ');
+            menu.Items.Add(new ToolStripMenuItem(headText)
+            {
+                Enabled = false,
+                Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold)
+            });
+            menu.Items.Add(new ToolStripSeparator());
+
+            string dir, file = null;
+            if (mode == "codex") { dir = st.Session?.Cwd; file = st.Session?.FilePath; }
+            else if (mode == "workbuddy") dir = Path.Combine(AppPaths.Home, ".workbuddy", "projects");
+            else dir = Path.Combine(AppPaths.Home, ".gemini", "antigravity");
+
+            var openDir = new ToolStripMenuItem("打开会话目录") { Enabled = !string.IsNullOrEmpty(dir) && Directory.Exists(dir) };
+            openDir.Click += (_, _) => OpenFolder(dir);
+            menu.Items.Add(openDir);
+
+            var openFile = new ToolStripMenuItem("打开当前会话文件")
+            {
+                ShortcutKeyDisplayString = "双击完成条"
+            };
+            openFile.Click += (_, _) => OpenSession(mode);
+            menu.Items.Add(openFile);
+
+            var copyPath = new ToolStripMenuItem("复制会话路径") { Enabled = !string.IsNullOrEmpty(file) };
+            copyPath.Click += (_, _) => CopyText(file);
+            menu.Items.Add(copyPath);
+
+            menu.Items.Add(new ToolStripSeparator());
+
+            var refresh = new ToolStripMenuItem("刷新数据");
+            refresh.Click += async (_, _) => await _data.RefreshAllAsync();
+            menu.Items.Add(refresh);
+            menu.Items.Add(new ToolStripMenuItem("折叠 / 展开", null, (_, _) => ToggleCollapse())
+            {
+                ShortcutKeyDisplayString = _hotkeyText
+            });
+            menu.Items.Add(new ToolStripMenuItem("隐藏面板", null, (_, _) => Hide()));
+
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("重启面板", null, (_, _) => RestartWebView("menu")));
+            menu.Items.Add(new ToolStripMenuItem("退出", null, (_, _) => Close()));
+
+            menu.Closed += (_, _) => { try { menu.Dispose(); } catch { } };
+
+            int x = 0, y = 0;
+            if (args.ValueKind == JsonValueKind.Object)
+            {
+                if (args.TryGetProperty("x", out var px) && px.ValueKind == JsonValueKind.Number) x = (int)px.GetDouble();
+                if (args.TryGetProperty("y", out var py) && py.ValueKind == JsonValueKind.Number) y = (int)py.GetDouble();
+            }
+            menu.Show(x > 0 && y > 0 ? new Point(x, y) : Cursor.Position);
+        }
+        catch (Exception ex) { Log.Write("menu: " + ex.Message); }
+    }
+
+    private static void OpenFolder(string path)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + path + "\"") { UseShellExecute = true });
+        }
+        catch (Exception ex) { Log.Write("open folder: " + ex.Message); }
+    }
+
+    // 点完成条：直接定位到那个 agent 当前会话的 rollout / transcript 文件
+    private void OpenSession(string agent)
+    {
+        try
+        {
+            var st = _data.State;
+            var who = string.IsNullOrEmpty(agent) ? (st.Mode ?? "codex") : agent;
+            string file = who switch
+            {
+                "workbuddy" => st.WbFile ?? st.Wb?.FilePath,
+                "antigravity" => st.AgFile,
+                _ => st.Session?.FilePath
+            };
+
+            if (!string.IsNullOrEmpty(file) && File.Exists(file))
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + file + "\"") { UseShellExecute = true });
+                Log.Write("open-session " + who + " -> " + file);
+                return;
+            }
+
+            // 找不到具体文件就退化成打开目录
+            var dir = who switch
+            {
+                "workbuddy" => Path.Combine(AppPaths.Home, ".workbuddy", "projects"),
+                "antigravity" => Path.Combine(AppPaths.Home, ".gemini", "antigravity", "brain"),
+                _ => st.Session?.Cwd
+            };
+            Log.Write("open-session fallback " + who + " dir=" + (dir ?? "null"));
+            OpenFolder(dir);
+        }
+        catch (Exception ex) { Log.Write("open-session: " + ex.Message); }
+    }
+
+    private static void CopyText(string text)
+    {
+        try { if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text); }
+        catch (Exception ex) { Log.Write("clipboard: " + ex.Message); }
     }
 
     /* ---------------- 托盘 ---------------- */
@@ -475,7 +705,8 @@ public sealed class MainForm : Form
     return Math.round((on / (cv.width * cv.height)) * 1000) / 10;
   };
   return {
-    csum: t('csum'), c5top: t('c5top'), cwtop: t('cwtop'),
+    csum: t('csum'), c5top: t('c5top'), cwtop: t('cwtop'), mosum: t('mosum'),
+    csum2: document.getElementById('csum2') ? document.getElementById('csum2').innerText.trim() : null,
     v5: t('v5'), vw: t('vw'), r5: t('r5'), rw: t('rw'),
     sname: t('sname'), sstate: t('sstate'), fsum: t('fsum'),
     smodel: (window.__state && window.__state.session || {}).model || null,
@@ -502,8 +733,20 @@ public sealed class MainForm : Form
     wbRunning: (window.__state && window.__state.wb && window.__state.wb.running) || false,
     wbModelRaw: (window.__state && window.__state.wb && window.__state.wb.model) || null,
     wbHtml: document.getElementById('viewWb') ? document.getElementById('viewWb').innerText.replace(/\n+/g, ' | ') : null,
-    ink5: cov('c5'), inkW: cov('cw'),
-    win5: d.r5, winW: d.rw, pts5: d.h5, ptsW: d.wk, now: d.now
+    ink5: cov('c5'), inkW: cov('cw'), inkMo: cov('cmo'),
+    win5: d.r5, winW: d.rw, winMo: d.rm, pts5: d.h5, ptsW: d.wk, ptsMo: d.mo, now: d.now,
+    cmotop: t('cmotop'), csum2: t('csum2'),
+    skCodex: document.getElementById('skCodex') ? document.getElementById('skCodex').innerText : null,
+    skWb: document.getElementById('skWb') ? document.getElementById('skWb').innerText : null,
+    skState: (window.__state && window.__state.session && window.__state.session.skills) || null,
+    collapsed: app ? app.classList.contains('collapsed') : null,
+    petState: document.getElementById('petStrip') ? document.getElementById('petStrip').dataset.state : null,
+    petSay: t('petSay'), petSub: t('petSub'),
+    heatCells: document.querySelectorAll('#heat i').length,
+    heatReady: (window.__state && window.__state.heat && window.__state.heat.ready) || false,
+    heatPeak: t('heatPeak'), heatTotal: t('heatTotal'), heatsum: t('heatsum'),
+    moTotal: (window.__state && window.__state.heat && window.__state.heat.monthTotal) || 0,
+    moPts: (window.__state && window.__state.heat && window.__state.heat.month && window.__state.heat.month.length) || 0
   };
 })())";
             var json = await _core.ExecuteScriptAsync(script);
@@ -520,9 +763,22 @@ public sealed class MainForm : Form
         {
             await Task.Delay(7000);
             await CaptureTo("codex");
-            await _core.ExecuteScriptAsync("document.getElementById('foldCurve').click()");
-            await Task.Delay(1800);
+            await _core.ExecuteScriptAsync(
+                "if(!document.getElementById('curveBody').classList.contains('open'))document.getElementById('foldCurve').click()");
+            await Task.Delay(800);
+            await _core.ExecuteScriptAsync(
+                "if(!document.getElementById('monthBody').classList.contains('open'))document.getElementById('foldMonth').click()");
+            await Task.Delay(1600);
             await CaptureTo("curve");
+            await _core.ExecuteScriptAsync(
+                "if(!document.getElementById('heatBody').classList.contains('open'))document.getElementById('foldHeat').click()");
+            await Task.Delay(1000);
+            await CaptureTo("heat");
+            // 模拟鼠标停在周曲线 62% 位置，检查准星 + 数值气泡
+            await _core.ExecuteScriptAsync("(function(){var cv=document.getElementById('cw');var r=cv.getBoundingClientRect();cv.dispatchEvent(new MouseEvent('mousemove',{clientX:r.left+r.width*0.62,clientY:r.top+r.height/2,bubbles:true}));})()");
+            await Task.Delay(700);
+            await CaptureTo("hover");
+            await _core.ExecuteScriptAsync("document.getElementById('cmo').dispatchEvent(new MouseEvent('mouseleave',{bubbles:true}))");
             await _core.ExecuteScriptAsync("document.querySelector('[data-mode=\\\"workbuddy\\\"]').click()");
             await Task.Delay(2200);
             await CaptureTo("wb");
@@ -532,8 +788,76 @@ public sealed class MainForm : Form
             await _core.ExecuteScriptAsync("document.querySelector('[data-mode=\\\"codex\\\"]').click()");
             await Task.Delay(800);
             await CaptureTo("final");
+            // 小人的两个特殊状态：冻住状态机再摆拍，否则 5 秒一次的状态推送会把它刷回去
+            await _core.ExecuteScriptAsync(
+                "window.__up=updatePet;updatePet=function(){};" +
+                "(function(){var p=document.getElementById('petStrip');p.dataset.state='done';p.dataset.accent='codex';" +
+                "document.getElementById('petSay').textContent='WORKBUDDY 交活了';" +
+                "document.getElementById('petSub').textContent='deepseek v4.1 flash';})()");
+            await Task.Delay(320);
+            await CaptureTo("petdone");
+            await _core.ExecuteScriptAsync(
+                "(function(){var p=document.getElementById('petStrip');p.dataset.state='hug';" +
+                "document.getElementById('petSay').textContent='抱头…';" +
+                "document.getElementById('petSub').textContent='只剩 6%，省着点用';})()");
+            await Task.Delay(360);
+            await CaptureTo("pethug");
+            await _core.ExecuteScriptAsync(
+                "(function(){var p=document.getElementById('petStrip');p.dataset.state='sleep';" +
+                "document.getElementById('petSay').textContent='打瞌睡了…';" +
+                "document.getElementById('petSub').textContent='凌晨 3 点还在跑';})()");
+            await Task.Delay(700);
+            await CaptureTo("petsleep");
+            await _core.ExecuteScriptAsync(
+                "(function(){var p=document.getElementById('petStrip');p.dataset.state='shy';" +
+                "document.getElementById('petSay').textContent='嘿嘿…';" +
+                "document.getElementById('petSub').textContent='已被摸头 7 次';})()");
+            await Task.Delay(340);
+            await CaptureTo("petshy");
+            await _core.ExecuteScriptAsync(
+                "(function(){var p=document.getElementById('petStrip');p.dataset.state='coffee';" +
+                "document.getElementById('petSay').textContent='喝口水吧';" +
+                "document.getElementById('petSub').textContent='已经连着跑了 2 小时';})()");
+            await Task.Delay(360);
+            await CaptureTo("petcoffee");
+            // 折起来只剩一行摘要
+            await _core.ExecuteScriptAsync("document.getElementById('foldPet').click()");
+            await Task.Delay(700);
+            await CaptureTo("petfold");
+            await _core.ExecuteScriptAsync("document.getElementById('foldPet').click()");
+            await _core.ExecuteScriptAsync("updatePet=window.__up");
+            await Task.Delay(500);
+            // 整卡折叠
+            await _core.ExecuteScriptAsync("document.getElementById('collapse').click()");
+            await Task.Delay(1400);
+            await CaptureTo("collapsed");
+            await _core.ExecuteScriptAsync("document.getElementById('collapse').click()");
+            await Task.Delay(700);
+            // 右键菜单是原生窗口，得抓屏幕
+            await _core.ExecuteScriptAsync($"window.pet.menu({{x:{(Left + 40)},y:{(Top + 60)}}})");
+            await Task.Delay(800);
+            CaptureScreenTo("menu");
+            try { SendKeys.Send("{ESC}"); } catch { }
+            await Task.Delay(400);
         }
         catch (Exception ex) { Log.Write("capture: " + ex.Message); }
+        try { Close(); } catch { }
+    }
+
+    private void CaptureScreenTo(string name)
+    {
+        try
+        {
+            var r = new Rectangle(Left - 10, Top - 10, Width + 230, Height + 260);
+            var vs = SystemInformation.VirtualScreen;
+            r.Intersect(vs);
+            if (r.Width <= 0 || r.Height <= 0) return;
+            using var bmp = new Bitmap(r.Width, r.Height);
+            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.Location, Point.Empty, r.Size);
+            bmp.Save($"{_captureBase}-{name}.png");
+            Log.Write("screen capture " + name);
+        }
+        catch (Exception ex) { Log.Write("screen capture fail: " + ex.Message); }
     }
 
     private async Task CaptureTo(string name)
@@ -557,11 +881,12 @@ public sealed class MainForm : Form
     {
         Log.Write("closed, reason=" + e.CloseReason + ", stack=" + Environment.StackTrace);
         try { _cts.Cancel(); } catch { }
+        if (_hotkeyOk) { try { UnregisterHotKey(Handle, HotkeyToggle); } catch { } }
         _saveTimer.Stop();
         _cfg.X = Left;
         _cfg.Y = Top;
         _cfg.Height = Height;
-        ConfigStore.Save(_cfg);
+        if (!Ephemeral) ConfigStore.Save(_cfg);
         _tray.Visible = false;
         _tray.Dispose();
     }

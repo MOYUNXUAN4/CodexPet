@@ -20,7 +20,8 @@ public sealed class DataService
     private const string ForecastUrl = "https://codex-reset.com/api/forecast";
     private const string AgStatusPath = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
     private const string AgQuotaPath = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
-    private const long HistKeepMs = 8L * 86400000;
+    // 月曲线要从「本月 5 号」开始算，历史至少留 40 天
+    private const long HistKeepMs = 40L * 86400000;
     // 老版本 language_server 监听 12370+，新版本改成 32xx，顺序仅作兜底，实际端口动态探测
     private static readonly int[] AgPorts = Enumerable.Range(12370, 11).ToArray();
 
@@ -34,6 +35,10 @@ public sealed class DataService
     private static readonly Regex EffortRe = new("\"effort\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.Compiled);
     private static readonly Regex CsrfRe = new("\"csrfToken\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.Compiled);
     private static readonly Regex ModelSuffixRe = new("\\s*\\((?:Thinking|High|Medium|Low)\\)\\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // skill 调用痕迹：读 SKILL.md 的路径，或 Skill 工具的 {"skill":"名字"} 参数
+    private static readonly Regex SkillPathRe = new("skills[\\\\/]+([A-Za-z0-9][A-Za-z0-9._\\-]{1,38})[\\\\/]+SKILL\\.md",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SkillArgRe = new("\"skill\"\\s*:\\s*\"([A-Za-z0-9][A-Za-z0-9._\\-]{1,38})\"", RegexOptions.Compiled);
 
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
     private readonly HttpClient _agHttp;
@@ -80,6 +85,12 @@ public sealed class DataService
         State.Mode = cfg.Mode is "antigravity" or "workbuddy" ? cfg.Mode : "codex";
         State.Expanded = cfg.Expanded;
         State.CurveOpen = cfg.CurveOpen;
+        State.MonthOpen = cfg.MonthOpen;
+        State.HeatOpen = cfg.HeatOpen;
+        State.Collapsed = cfg.Collapsed;
+        // 成本估算：默认按 $2/百万 output token、汇率 7.1，可在配置里覆盖
+        State.CostPerMTok = cfg.PricePerMTok is > 0 ? cfg.PricePerMTok.Value : 2.0;
+        State.FxRate = cfg.FxRate is > 0 ? cfg.FxRate.Value : 7.1;
         _usageTransport = cfg.NetTransport == "curl" ? 2 : cfg.NetTransport == "http" ? 1 : 0;
 
         var handler = new HttpClientHandler
@@ -103,6 +114,15 @@ public sealed class DataService
         _ = Task.Run(async () =>
         {
             try { await BackfillHistoryAsync(); } catch (Exception ex) { Log.Write("backfill: " + ex.Message); }
+        }, ct);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                LoadHeatCache();
+                BuildHeat();
+            }
+            catch (Exception ex) { Log.Write("heat start: " + ex.Message); }
         }, ct);
         _ = Task.Run(() => LoopAsync(ct), ct);
     }
@@ -129,6 +149,7 @@ public sealed class DataService
                 if ((DateTime.UtcNow - _lastUsage).TotalSeconds >= 60) await FetchUsageAsync();
                 if ((DateTime.UtcNow - _lastForecast).TotalMinutes >= 10) await FetchForecastAsync();
                 if ((DateTime.UtcNow - _lastWb).TotalMinutes >= 5) CollectWb();
+                if ((DateTime.UtcNow - _lastHeatBuild).TotalMinutes >= 10) BuildHeat();
                 if ((DateTime.UtcNow - _lastHistSave).TotalMinutes >= 5)
                 {
                     RefreshHistoryPayload();
@@ -478,6 +499,8 @@ public sealed class DataService
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var h5 = new List<double[]>();
         var wk = new List<double[]>();
+        var mo = new List<double[]>();
+        var monthFrom = MonthStartMs();
         lock (_histLock)
         {
             foreach (var s in _hist.Samples)
@@ -485,11 +508,13 @@ public sealed class DataService
                 // 5 小时窗口起点最多可能在 10 小时前（重置时刻在未来），多留一个窗口的历史
                 if (s.P5.HasValue && s.T >= now - 13 * 3600L * 1000) h5.Add(new[] { (double)s.T, s.P5.Value });
                 if (s.Pw.HasValue && s.T >= now - 8 * 86400L * 1000) wk.Add(new[] { (double)s.T, s.Pw.Value });
+                if (s.Pw.HasValue && s.T >= monthFrom) mo.Add(new[] { (double)s.T, s.Pw.Value });
             }
             State.History = new HistoryPayload
             {
                 H5 = Thin(h5, 130),
                 Wk = Thin(wk, 130),
+                Mo = Thin(mo, 200),
                 Total = _hist.Samples.Count,
                 Ready = true
             };
@@ -530,7 +555,7 @@ public sealed class DataService
         var batch = new List<HistSample>();
         var changed = false;
 
-        for (var d = 0; d <= 8; d++)
+        for (var d = 0; d <= 40; d++)
         {
             var dt = DateTime.Now.AddDays(-d);
             var dir = Path.Combine(AppPaths.SessionsDir, dt.Year.ToString(), dt.Month.ToString("00"), dt.Day.ToString("00"));
@@ -601,6 +626,70 @@ public sealed class DataService
     {
         var d = DateTimeOffset.FromUnixTimeMilliseconds(ts).ToLocalTime().Date;
         return new DateTimeOffset(d, TimeZoneInfo.Local.GetUtcOffset(d)).ToUnixTimeMilliseconds();
+    }
+
+    // 本月计费起点：每月 5 号 00:00（今天还没到 5 号就用上个月的 5 号）
+    private static long MonthStartMs()
+    {
+        var now = DateTime.Now;
+        var start = new DateTime(now.Year, now.Month, 5, 0, 0, 0, DateTimeKind.Local);
+        if (now < start) start = start.AddMonths(-1);
+        return new DateTimeOffset(start).ToUnixTimeMilliseconds();
+    }
+
+    // 从会话文件尾部找出「这次对话真正调用过的 skill」。
+    // 只能认工具调用行：会话开头的可用技能清单（skills_instructions / developer 消息）、
+    // 以及模型思考文本里提到的技能名都不算调用。
+    private static List<string> ReadSkills(string path)
+    {
+        var outList = new List<string>();
+        try
+        {
+            var tail = ReadTail(path, 512 * 1024);
+            var lines = tail.Split('\n');
+            for (var i = lines.Length - 1; i >= 0 && outList.Count < 4; i--)
+            {
+                var line = lines[i].Trim();
+                if (line.Length < 20 || !line.StartsWith("{")) continue;
+                if (line.IndexOf("SKILL.md", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    line.IndexOf("\"skill\"", StringComparison.Ordinal) < 0) continue;
+
+                JsonDocument doc;
+                try { doc = JsonDocument.Parse(line); } catch { continue; }
+                using (doc)
+                {
+                    var root = doc.RootElement;
+                    var kind = Str(root, "type");
+                    var toolName = Str(root, "name");
+                    if (root.TryGetProperty("payload", out var pl) && pl.ValueKind == JsonValueKind.Object)
+                    {
+                        kind = Str(pl, "type") ?? kind;
+                        toolName = Str(pl, "name") ?? toolName;
+                    }
+
+                    var isTool = kind is "function_call" or "custom_tool_call" or "local_shell_call"
+                        or "tool_use" or "tool_call";
+                    if (!isTool) continue;
+
+                    var names = new List<string>();
+                    if (string.Equals(toolName, "Skill", StringComparison.OrdinalIgnoreCase))
+                        foreach (Match m in SkillArgRe.Matches(line)) names.Add(m.Groups[1].Value);
+                    foreach (Match m in SkillPathRe.Matches(line)) names.Add(m.Groups[1].Value);
+
+                    for (var k = names.Count - 1; k >= 0; k--)
+                    {
+                        var n = names[k];
+                        if (n.Length < 2 || n.Length > 38) continue;
+                        if (n is ".system" or "n" or "n-" or "cache" or "plugins" or "skills") continue;
+                        if (outList.Contains(n)) continue;
+                        outList.Add(n);
+                        if (outList.Count >= 4) break;
+                    }
+                }
+            }
+        }
+        catch { }
+        return outList;
     }
 
     // WorkBuddy 的模型名在 providerData 里（model / requestModelName / agent）
@@ -737,6 +826,7 @@ public sealed class DataService
             LastActiveAt = lastActive > 0 ? lastActive : null,
             Hourly = hourly.ToList(),
             Daily = daily.ToList(),
+            Skills = newestFile != null ? ReadSkills(newestFile) : new List<string>(),
             Ready = true
         };
         _lastWb = DateTime.UtcNow;
@@ -870,6 +960,8 @@ public sealed class DataService
                 }
             }
             if (newest == null) return;
+            State.WbFile = newest;
+            if (State.Wb != null) State.Wb.FilePath = newest;
 
             var tail = ReadTail(newest, 160 * 1024);
             long? lastMsgTs = null;
@@ -956,6 +1048,7 @@ public sealed class DataService
                 if (t > newestT) { newestT = t; newest = p; }
             }
             if (newest == null) return;
+            State.AgFile = newest;
 
             var tail = ReadTail(newest, 160 * 1024);
             long? step = null;
@@ -1625,6 +1718,7 @@ public sealed class DataService
         {
             Title = string.IsNullOrEmpty(meta.Cwd) ? "未命名会话" : Path.GetFileName(meta.Cwd.TrimEnd('\\', '/')),
             Cwd = meta.Cwd,
+            FilePath = latest.Value.Path,
             Running = running,
             CtxPercent = ctxWindow > 0 && ctxUsed != null ? (int?)Math.Round((double)ctxUsed.Value / ctxWindow.Value * 100) : null,
             CtxUsed = ctxUsed,
@@ -1639,7 +1733,8 @@ public sealed class DataService
                 : null,
             SubagentKind = string.IsNullOrEmpty(meta.ThreadSource) ? "user" : meta.ThreadSource,
             LastActiveAt = latest.Value.Mtime,
-            LastType = lastType
+            LastType = lastType,
+            Skills = ReadSkills(latest.Value.Path)
         };
 
         // 主会话里派发的子代理：把它的模型也带上来
@@ -1702,5 +1797,200 @@ public sealed class DataService
             DateTimeOffset.TryParse(ts.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
             return dto.ToUnixTimeMilliseconds();
         return 0;
+    }
+
+    /* ---------------- 活跃热力图（30 天 × 24 小时） ---------------- */
+
+    private const int HeatDayCount = 30;
+    private static readonly JsonSerializerOptions HeatJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+    // 每个 rollout 文件的小时聚合，按 size+mtime 判断有没有变，避免每次都重扫几百 MB
+    private readonly Dictionary<string, HeatCacheEntry> _heatCache = new(StringComparer.OrdinalIgnoreCase);
+    private bool _heatBuilding;
+    private DateTime _lastHeatBuild = DateTime.MinValue;
+
+    public Task BuildHeatAsync() => Task.Run(BuildHeat);
+
+    private void LoadHeatCache()
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.HeatFile)) return;
+            var d = JsonSerializer.Deserialize<HeatCacheFile>(File.ReadAllText(AppPaths.HeatFile), HeatJson);
+            if (d?.Files != null)
+                foreach (var kv in d.Files)
+                    if (kv.Value != null) _heatCache[kv.Key] = kv.Value;
+            Log.Write($"heat cache loaded: {_heatCache.Count} files");
+        }
+        catch (Exception ex) { Log.Write("heat load: " + ex.Message); }
+    }
+
+    private void SaveHeatCache()
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.DataDir);
+            var d = new HeatCacheFile();
+            foreach (var kv in _heatCache) d.Files[kv.Key] = kv.Value;
+            File.WriteAllText(AppPaths.HeatFile, JsonSerializer.Serialize(d, HeatJson));
+        }
+        catch (Exception ex) { Log.Write("heat save: " + ex.Message); }
+    }
+
+    private void BuildHeat()
+    {
+        if (_heatBuilding) return;
+        _heatBuilding = true;
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var today = DateTime.Today;
+            var day0 = today.AddDays(-(HeatDayCount - 1));
+            var cutoff = new DateTimeOffset(day0).ToUnixTimeMilliseconds();
+
+            var hours = new Dictionary<long, double>(4096);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var parsed = 0;
+
+            if (Directory.Exists(AppPaths.SessionsDir))
+            {
+                foreach (var f in Directory.EnumerateFiles(AppPaths.SessionsDir, "*.jsonl", SearchOption.AllDirectories))
+                {
+                    FileInfo fi;
+                    try { fi = new FileInfo(f); } catch { continue; }
+                    if (!fi.Exists || fi.LastWriteTime < day0) continue;   // 30 天前就不再动的会话不可能有窗口内的事件
+                    seen.Add(f);
+
+                    if (_heatCache.TryGetValue(f, out var hit) && hit.Size == fi.Length &&
+                        hit.Mtime != 0 && Math.Abs(hit.Mtime - fi.LastWriteTimeUtc.Ticks) < 1)
+                    {
+                        foreach (var kv in hit.Hours)
+                            if (long.TryParse(kv.Key, out var hk) && hk >= cutoff)
+                                hours[hk] = hours.TryGetValue(hk, out var old) ? old + kv.Value : kv.Value;
+                        continue;
+                    }
+
+                    var map = ScanHeatFile(f, cutoff);
+                    parsed++;
+                    _heatCache[f] = new HeatCacheEntry
+                    {
+                        Size = fi.Length,
+                        Mtime = fi.LastWriteTimeUtc.Ticks,
+                        Hours = map.ToDictionary(kv => kv.Key.ToString(CultureInfo.InvariantCulture), kv => kv.Value)
+                    };
+                    foreach (var kv in map)
+                        hours[kv.Key] = hours.TryGetValue(kv.Key, out var old) ? old + kv.Value : kv.Value;
+                }
+            }
+
+            foreach (var gone in _heatCache.Keys.Where(k => !seen.Contains(k)).ToList()) _heatCache.Remove(gone);
+
+            var grid = new List<List<int>>(HeatDayCount);
+            var days = new List<string>(HeatDayCount);
+            int max = 0, total = 0, peakD = 0, peakH = 0;
+            for (var d = 0; d < HeatDayCount; d++)
+            {
+                var day = day0.AddDays(d);
+                var row = new List<int>(24);
+                for (var h = 0; h < 24; h++)
+                {
+                    var key = new DateTimeOffset(day.AddHours(h)).ToUnixTimeMilliseconds();
+                    var v = hours.TryGetValue(key, out var x) ? x : 0;
+                    var k = (int)Math.Round(v / 1000.0, MidpointRounding.AwayFromZero);
+                    row.Add(k);
+                    total += k;
+                    if (k > max) { max = k; peakD = d; peakH = h; }
+                }
+                grid.Add(row);
+                days.Add($"{day.Month:00}-{day.Day:00}");
+            }
+
+            // 本月（5 号起）累计 token：直接用小时桶累加，热力图本来就覆盖到 29 天前
+            var nowLocal = DateTime.Now;
+            var monthStart = new DateTime(nowLocal.Year, nowLocal.Month, 5);
+            if (nowLocal.Date < monthStart) monthStart = monthStart.AddMonths(-1);
+            if (monthStart < day0) monthStart = day0;
+            var monthPts = new List<double[]>();
+            var acc = 0.0;
+            for (var day = monthStart.Date; day <= nowLocal.Date; day = day.AddDays(1))
+            {
+                var lastHour = day == nowLocal.Date ? nowLocal.Hour : 23;
+                for (var hh = 0; hh <= lastHour; hh++)
+                {
+                    var hkey = new DateTimeOffset(day.AddHours(hh)).ToUnixTimeMilliseconds();
+                    if (hours.TryGetValue(hkey, out var hv)) acc += hv;
+                }
+                var pointTs = day == nowLocal.Date
+                    ? NowMs()
+                    : new DateTimeOffset(day.AddDays(1)).ToUnixTimeMilliseconds();
+                monthPts.Add(new[] { (double)pointTs, Math.Round(acc / 1000.0, 1) });
+            }
+            var monthTotal = (int)Math.Round(acc / 1000.0);
+
+            var payload = new HeatPayload
+            {
+                Grid = grid,
+                Month = monthPts,
+                MonthTotal = monthTotal,
+                MonthStart = new DateTimeOffset(monthStart.Date).ToUnixTimeMilliseconds(),
+                Days = days,
+                Max = max,
+                Total = total,
+                PeakDay = peakD,
+                PeakHour = peakH,
+                PeakText = max > 0 ? $"{days[peakD]} {peakH:00}:00 · {FmtK(max)}" : null,
+                UpdatedAt = NowMs(),
+                Ready = true
+            };
+            lock (Sync) State.Heat = payload;
+            SaveHeatCache();
+            _lastHeatBuild = DateTime.UtcNow;
+            Log.Write($"heat built: parsed={parsed} cached={_heatCache.Count} max={max}k total={total}k in {sw.ElapsedMilliseconds}ms");
+            Raise();
+        }
+        catch (Exception ex) { Log.Write("heat: " + ex.Message); }
+        finally { _heatBuilding = false; }
+    }
+
+    private static string FmtK(int k) => k >= 1000
+        ? (k / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + "M"
+        : k + "k";
+
+    // 一个 rollout 里每个 token_count 事件带的是「本轮消耗」，按本地小时累加就是生成量
+    private static Dictionary<long, double> ScanHeatFile(string path, long cutoff)
+    {
+        var map = new Dictionary<long, double>();
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
+            using var sr = new StreamReader(fs, Encoding.UTF8, false, 1 << 16);
+            string line;
+            while ((line = sr.ReadLine()) != null)
+            {
+                if (line.IndexOf("\"token_count\"", StringComparison.Ordinal) < 0) continue;
+                if (line.IndexOf("\"last_token_usage\"", StringComparison.Ordinal) < 0) continue;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    if (!root.TryGetProperty("payload", out var pl)) continue;
+                    if (!pl.TryGetProperty("info", out var info)) continue;
+                    if (!info.TryGetProperty("last_token_usage", out var lu)) continue;
+                    var tok = Num(lu, "output_tokens") ?? 0;
+                    if (tok <= 0) continue;
+                    var ms = TsOf(root);
+                    if (ms < cutoff || ms <= 0) continue;
+                    var lt = DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime();
+                    var key = new DateTimeOffset(lt.Year, lt.Month, lt.Day, lt.Hour, 0, 0, lt.Offset).ToUnixTimeMilliseconds();
+                    map[key] = map.TryGetValue(key, out var old) ? old + tok : tok;
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex) { Log.Write("heat scan " + Path.GetFileName(path) + ": " + ex.Message); }
+        return map;
     }
 }

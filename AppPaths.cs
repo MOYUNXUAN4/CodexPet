@@ -11,6 +11,8 @@ public static class AppPaths
     public static string DataDir => Path.Combine(AppData, "codex-pet");
     public static string ConfigFile => Path.Combine(DataDir, "codex-pet-config.json");
     public static string HistoryFile => Path.Combine(DataDir, "codex-history.json");
+    // 热力图的增量缓存：每个 rollout 文件已按小时聚合过的结果
+    public static string HeatFile => Path.Combine(DataDir, "codex-heat.json");
     public static string StartupDir => Path.Combine(AppData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
     public static string StartupLnk => Path.Combine(StartupDir, "Codex 仪表盘.lnk");
     public static string DesktopLnk => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Codex 仪表盘.lnk");

@@ -40,6 +40,10 @@
     resize: (h) => { if (wv) wv.postMessage({ id: 0, cmd: 'resize', args: h }); },
     probe: (tag) => { if (wv) wv.postMessage({ id: 0, cmd: 'probe', args: tag || '' }); },
     quit: () => send('quit'),
+    // 右键菜单交给宿主弹原生菜单（网页里的 contextmenu 默认被禁掉了）
+    menu: (o) => { if (wv) wv.postMessage({ id: 0, cmd: 'menu', args: o || {} }); },
+    // 打开某个 agent 当前会话的文件（资源管理器里选中）
+    openSession: (agent) => { if (wv) wv.postMessage({ id: 0, cmd: 'open-session', args: agent || '' }); },
     openExternal: (url) => send('open-external', url)
   };
 })();

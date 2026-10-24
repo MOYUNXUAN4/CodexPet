@@ -8,7 +8,7 @@
 <body>
 <div class="app" id="app">
 
-  <div class="donebar" id="doneBar" title="点击切到该 agent">
+  <div class="donebar" id="doneBar" title="单击切到该 agent · 双击打开会话文件">
     <span class="dchk">
       <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor"
            stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -25,6 +25,7 @@
     <span class="dot" id="dot"></span>
     <span class="name" id="brand">CODEX</span>
     <span class="plan" id="plan">PLUS</span>
+    <span class="csum2" id="csum2"></span>
     <span class="grow"></span>
     <div class="seg" id="seg">
       <button data-mode="codex" class="on">CX</button>
@@ -36,7 +37,59 @@
         <path d="M21 12a9 9 0 1 1-3.2-6.9"/><path d="M21 4v5h-5"/>
       </svg>
     </button>
+    <button class="ico" id="collapse" title="折叠 / 展开">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 15l6-6 6 6"/>
+      </svg>
+    </button>
   </div>
+
+  <!-- 桌宠小人（可以折叠） -->
+  <button class="fold petfold" id="foldPet">
+    <span class="flab">桌宠</span>
+    <span class="fsum" id="petSum">待命</span>
+    <svg class="chev" id="chevPet" viewBox="0 0 12 12" width="12" height="12" fill="none"
+         stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 4.5 L6 7.5 L9 4.5"/>
+    </svg>
+  </button>
+  <div class="foldbody open petbody" id="petBody">
+  <div class="petstrip" id="petStrip" data-state="idle" title="点我一下">
+    <svg class="petsvg" viewBox="0 0 68 62" aria-hidden="true">
+      <g class="pbob">
+        <line class="pwire" x1="34" y1="19" x2="34" y2="11"/>
+        <circle class="ptip" cx="34" cy="8.6" r="2.8"/>
+        <rect class="pbody" x="15" y="19" width="38" height="29" rx="10"/>
+
+        <rect class="peye" x="25" y="28" width="4.6" height="6" rx="2.2"/>
+        <rect class="peye" x="38.4" y="28" width="4.6" height="6" rx="2.2"/>
+        <path class="pmouth" d="M31 40 h6"/>
+        <path class="psmile" d="M30 39 q4 4.4 8 0"/>
+        <path class="psad" d="M24.4 28 l3.6 3 l-3.6 3"/>
+        <path class="psad" d="M43.6 28 l-3.6 3 l3.6 3"/>
+        <circle class="pblush" cx="23.6" cy="36.4" r="2.7"/>
+        <circle class="pblush" cx="44.4" cy="36.4" r="2.7"/>
+
+        <rect class="parm al" x="8" y="27" width="7.5" height="4.4" rx="2.2"/>
+        <rect class="parm ar" x="52.5" y="27" width="7.5" height="4.4" rx="2.2"/>
+        <rect class="pkeys" x="20" y="50" width="28" height="4" rx="2"/>
+
+        <path class="psweat" d="M50.5 12.5 q4.4 6.6 0 9 q-4.4 -2.4 0 -9"/>
+        <circle class="pbadge" cx="53" cy="13" r="7"/>
+        <path class="ptick" d="M50 13 l2.4 2.6 l4.4 -5.2"/>
+      </g>
+    </svg>
+    <!-- 深夜打瞌睡时头顶冒的 zzz -->
+    <span class="pzzz" aria-hidden="true"><i>z</i><i>z</i><i>z</i></span>
+    <!-- 连续工作两小时递的咖啡 -->
+    <span class="pcup" aria-hidden="true"><i class="psteam"></i></span>
+    <div class="pettalk">
+      <b id="petSay">待命</b>
+      <span id="petSub"></span>
+    </div>
+  </div>
+  </div>
+  <div class="hair"></div>
 
   <!-- Codex -->
   <div id="viewCodex">
@@ -68,6 +121,8 @@
       <span class="sname" id="sname">—</span>
     </div>
 
+    <div class="skillrow" id="skCodex"></div>
+
     <div class="hair"></div>
 
     <button class="fold" id="foldCurve">
@@ -85,9 +140,43 @@
           <div class="chead"><span>5 小时</span><b id="c5top">--</b></div>
           <canvas id="c5" class="spark"></canvas>
         </div>
-        <div class="chart">
-          <div class="chead"><span>本周</span><b id="cwtop">--</b></div>
+        <div class="chart" title="本周从周一 09:00 起算">
+          <div class="chead"><span>本周·周一9点</span><b id="cwtop">--</b></div>
           <canvas id="cw" class="spark"></canvas>
+        </div>
+      </div>
+      <button class="fold sub" id="foldMonth">
+        <span class="flab">本月 Token</span>
+        <span class="fsum" id="mosum">--</span>
+        <svg class="chev" id="chev3" viewBox="0 0 12 12" width="12" height="12" fill="none"
+             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 4.5 L6 7.5 L9 4.5"/>
+        </svg>
+      </button>
+      <div class="foldbody sub" id="monthBody">
+        <div class="chart" title="每月 5 号起累计用掉的 token">
+          <div class="chead"><span>本月·5 号起 Token</span><b id="cmotop">--</b></div>
+          <canvas id="cmo" class="spark"></canvas>
+        </div>
+      </div>
+
+      <button class="fold sub" id="foldHeat">
+        <span class="flab">活跃热力图</span>
+        <span class="fsum" id="heatsum">--</span>
+        <svg class="chev" id="chev4" viewBox="0 0 12 12" width="12" height="12" fill="none"
+             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 4.5 L6 7.5 L9 4.5"/>
+        </svg>
+      </button>
+      <div class="foldbody sub" id="heatBody">
+        <div class="heatwrap">
+          <div class="heat" id="heat"></div>
+          <div class="heataxis"><span id="heatFrom">--</span><span>每列一天 · 每行一小时</span><span id="heatTo">--</span></div>
+        </div>
+        <div class="heatfoot">
+          <span id="heatPeak">--</span>
+          <span class="grow"></span>
+          <span id="heatTotal">--</span>
         </div>
       </div>
     </div>
@@ -126,6 +215,7 @@
       <span class="grow"></span>
       <span class="wbmmeta" id="wbModelSub"></span>
     </div>
+    <div class="skillrow" id="skWb"></div>
     <div class="metric">
       <div class="mline">
         <span class="lab">今日</span>
