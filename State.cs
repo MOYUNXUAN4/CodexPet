@@ -149,7 +149,7 @@ public sealed class HistoryPayload
     public bool Ready { get; set; }
 }
 
-// 30 天 × 24 小时的活跃热力图（按本地小时聚合生成量，单位 k token）
+// 30 天 × 24 小时的活跃热力图（按本地小时聚合 token，单位 k token）
 public sealed class HeatPayload
 {
     public List<List<int>> Grid { get; set; } = new();   // [天][小时]
@@ -162,20 +162,43 @@ public sealed class HeatPayload
     public List<double[]> Month { get; set; } = new();
     public int MonthTotal { get; set; }
     public long MonthStart { get; set; }
+    // 本月 token 构成（真实 token 数，不是 k）与按 gpt-6.1-sol 官方价折算的美元成本
+    public long MonthIn { get; set; }
+    public long MonthCached { get; set; }
+    public long MonthOut { get; set; }
+    public double MonthCost { get; set; }
+    // 本月各模型的花费构成（按花费降序）
+    public List<ModelCost> MonthModels { get; set; } = new();
+    public string PriceNote { get; set; }
     public string PeakText { get; set; }
     public long UpdatedAt { get; set; }
     public bool Ready { get; set; }
 }
 
+public sealed class ModelCost
+{
+    public string Name { get; set; }     // gpt-6.1-sol
+    public string Label { get; set; }    // 6.1 Sol
+    public long Tok { get; set; }        // 本月该模型的 token（输入 + 输出）
+    public double Cost { get; set; }     // 美元
+    public double Share { get; set; }    // 占本月花费的比例 0~1
+    public bool Priced { get; set; }     // 是否有官方价（false 时按 Sol 档估）
+}
+
 public sealed class HeatCacheEntry
 {
+    // 2 = Hours 改成「全部 token」（1 的时候只算了输出 token）
+    // 3 = 模型归因改成 turn_context（2 的时候取到 collaboration_mode，把 Sol 的用量算给了 Luna）
+    public int Ver { get; set; }
     public long Size { get; set; }
     public double Mtime { get; set; }
-    public Dictionary<string, double> Hours { get; set; } = new();   // 本地小时起点(ms) -> 生成 token
+    public Dictionary<string, double> Hours { get; set; } = new();   // 本地小时起点(ms) -> token
+    public Dictionary<string, long[]> Models { get; set; } = new();  // 模型名 -> [输入, 缓存输入, 缓存写入, 输出]
 }
 
 public sealed class HeatCacheFile
 {
+    public int Ver { get; set; }
     public Dictionary<string, HeatCacheEntry> Files { get; set; } = new();
 }
 

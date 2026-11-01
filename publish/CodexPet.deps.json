@@ -6,15 +6,29 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "CodexPet/2.1.0": {
+      "CodexPet/2.2.0": {
         "dependencies": {
           "Microsoft.Web.WebView2": "1.0.2903.40",
+          "ZstdSharp.Port": "0.8.8",
           "Microsoft.Web.WebView2.Core": "1.0.2903.40",
           "Microsoft.Web.WebView2.WinForms": "1.0.2903.40",
-          "Microsoft.Web.WebView2.Wpf": "1.0.2903.40"
+          "Microsoft.Web.WebView2.Wpf": "1.0.2903.40",
+          "runtimepack.Microsoft.Windows.SDK.NET.Ref": "10.0.19041.57"
         },
         "runtime": {
           "CodexPet.dll": {}
+        }
+      },
+      "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.57": {
+        "runtime": {
+          "Microsoft.Windows.SDK.NET.dll": {
+            "assemblyVersion": "10.0.19041.38",
+            "fileVersion": "10.0.19041.55"
+          },
+          "WinRT.Runtime.dll": {
+            "assemblyVersion": "2.2.0.0",
+            "fileVersion": "2.2.0.48161"
+          }
         }
       },
       "Microsoft.Web.WebView2/1.0.2903.40": {
@@ -33,6 +47,14 @@
             "rid": "win-x86",
             "assetType": "native",
             "fileVersion": "1.0.2903.40"
+          }
+        }
+      },
+      "ZstdSharp.Port/0.8.8": {
+        "runtime": {
+          "lib/net8.0/ZstdSharp.dll": {
+            "assemblyVersion": "0.8.8.0",
+            "fileVersion": "0.8.8.0"
           }
         }
       },
@@ -63,8 +85,13 @@
     }
   },
   "libraries": {
-    "CodexPet/2.1.0": {
+    "CodexPet/2.2.0": {
       "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.57": {
+      "type": "runtimepack",
       "serviceable": false,
       "sha512": ""
     },
@@ -74,6 +101,13 @@
       "sha512": "sha512-THrzYAnJgE3+cNH+9Epr44XjoZoRELdVpXlWGPs6K9C9G6TqyDfVCeVAR/Er8ljLitIUX5gaSkPsy9wRhD1sgQ==",
       "path": "microsoft.web.webview2/1.0.2903.40",
       "hashPath": "microsoft.web.webview2.1.0.2903.40.nupkg.sha512"
+    },
+    "ZstdSharp.Port/0.8.8": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-UIDFkA5DC3en3tOJ3Mof11yBx9kUQLsaeo/oFdvN6Bbkr9E9+VCqfIadHci8cu+I51K2Sl7XYWVl2R/mA75NBQ==",
+      "path": "zstdsharp.port/0.8.8",
+      "hashPath": "zstdsharp.port.0.8.8.nupkg.sha512"
     },
     "Microsoft.Web.WebView2.Core/1.0.2903.40": {
       "type": "reference",

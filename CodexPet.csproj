@@ -2,20 +2,24 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- 必须带 Windows SDK 版本：GSMTC（读取/控制 Spotify 等系统媒体会话）走 WinRT 投影 -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AssemblyName>CodexPet</AssemblyName>
     <RootNamespace>CodexPet</RootNamespace>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>none</DebugType>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 不能开 InvariantGlobalization：dynamic / COM 互操作要拿真实 culture，开了会抛 CultureNotFoundException -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 
   <ItemGroup>

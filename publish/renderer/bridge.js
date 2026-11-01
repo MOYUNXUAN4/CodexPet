@@ -4,6 +4,7 @@
 (function () {
   const wv = window.chrome && window.chrome.webview;
   const handlers = [];
+  const mediaHandlers = [];
   let seq = 0;
   const pending = new Map();
 
@@ -13,6 +14,8 @@
       if (!d || typeof d !== 'object') return;
       if (d.type === 'state') {
         for (const h of handlers) { try { h(d.state); } catch (_) {} }
+      } else if (d.type === 'media') {
+        for (const h of mediaHandlers) { try { h(d.media); } catch (_) {} }
       } else if (d.type === 'res' && pending.has(d.id)) {
         const p = pending.get(d.id);
         pending.delete(d.id);
@@ -44,6 +47,18 @@
     menu: (o) => { if (wv) wv.postMessage({ id: 0, cmd: 'menu', args: o || {} }); },
     // 打开某个 agent 当前会话的文件（资源管理器里选中）
     openSession: (agent) => { if (wv) wv.postMessage({ id: 0, cmd: 'open-session', args: agent || '' }); },
-    openExternal: (url) => send('open-external', url)
+    openExternal: (url) => send('open-external', url),
+
+    /* ---------- 播放器 ---------- */
+    onMedia: (cb) => { if (typeof cb === 'function') mediaHandlers.push(cb); },
+    getMedia: () => send('get-media'),
+    mediaToggle: () => { if (wv) wv.postMessage({ id: 0, cmd: 'media-toggle' }); },
+    mediaNext: () => { if (wv) wv.postMessage({ id: 0, cmd: 'media-next' }); },
+    mediaPrev: () => { if (wv) wv.postMessage({ id: 0, cmd: 'media-prev' }); },
+    mediaSeek: (sec) => { if (wv) wv.postMessage({ id: 0, cmd: 'media-seek', args: sec }); },
+    // 跳到 Spotify：'track' / 'artist' / 'album'
+    mediaOpen: (what) => { if (wv) wv.postMessage({ id: 0, cmd: 'media-open', args: what || 'track' }); },
+    // 收藏到「我喜欢」（转发 spotify 的 Alt+Shift+B，返回 {ok}）
+    mediaLike: () => send('media-like')
   };
 })();

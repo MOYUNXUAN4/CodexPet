@@ -44,48 +44,65 @@
     </button>
   </div>
 
-  <!-- 桌宠小人（可以折叠） -->
+  <!-- 正在播放（系统媒体会话 / Spotify） -->
   <button class="fold petfold" id="foldPet">
-    <span class="flab">桌宠</span>
-    <span class="fsum" id="petSum">待命</span>
+    <span class="flab">正在播放</span>
+    <span class="fsum" id="npSum">--</span>
     <svg class="chev" id="chevPet" viewBox="0 0 12 12" width="12" height="12" fill="none"
          stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 4.5 L6 7.5 L9 4.5"/>
     </svg>
   </button>
   <div class="foldbody open petbody" id="petBody">
-  <div class="petstrip" id="petStrip" data-state="idle" title="点我一下">
-    <svg class="petsvg" viewBox="0 0 68 62" aria-hidden="true">
-      <g class="pbob">
-        <line class="pwire" x1="34" y1="19" x2="34" y2="11"/>
-        <circle class="ptip" cx="34" cy="8.6" r="2.8"/>
-        <rect class="pbody" x="15" y="19" width="38" height="29" rx="10"/>
-
-        <rect class="peye" x="25" y="28" width="4.6" height="6" rx="2.2"/>
-        <rect class="peye" x="38.4" y="28" width="4.6" height="6" rx="2.2"/>
-        <path class="pmouth" d="M31 40 h6"/>
-        <path class="psmile" d="M30 39 q4 4.4 8 0"/>
-        <path class="psad" d="M24.4 28 l3.6 3 l-3.6 3"/>
-        <path class="psad" d="M43.6 28 l-3.6 3 l3.6 3"/>
-        <circle class="pblush" cx="23.6" cy="36.4" r="2.7"/>
-        <circle class="pblush" cx="44.4" cy="36.4" r="2.7"/>
-
-        <rect class="parm al" x="8" y="27" width="7.5" height="4.4" rx="2.2"/>
-        <rect class="parm ar" x="52.5" y="27" width="7.5" height="4.4" rx="2.2"/>
-        <rect class="pkeys" x="20" y="50" width="28" height="4" rx="2"/>
-
-        <path class="psweat" d="M50.5 12.5 q4.4 6.6 0 9 q-4.4 -2.4 0 -9"/>
-        <circle class="pbadge" cx="53" cy="13" r="7"/>
-        <path class="ptick" d="M50 13 l2.4 2.6 l4.4 -5.2"/>
-      </g>
-    </svg>
-    <!-- 深夜打瞌睡时头顶冒的 zzz -->
-    <span class="pzzz" aria-hidden="true"><i>z</i><i>z</i><i>z</i></span>
-    <!-- 连续工作两小时递的咖啡 -->
-    <span class="pcup" aria-hidden="true"><i class="psteam"></i></span>
-    <div class="pettalk">
-      <b id="petSay">待命</b>
-      <span id="petSub"></span>
+  <div class="np" id="np" data-on="0" data-playing="0">
+    <div class="nprow">
+      <div class="npcov" id="npcov" data-open="track" title="在 Spotify 中打开这首歌">
+        <img id="npimg" alt="" />
+        <span class="npfall">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M12 3v10.6a3.4 3.4 0 1 0 2 3.1V7.4l6-1.3V3.5z"/>
+          </svg>
+        </span>
+        <!-- 收藏到「我喜欢」：名字底下那个绿色对勾就是它 -->
+        <button type="button" class="npfav" id="npFav" title="收藏到「我喜欢的音乐」">
+          <svg class="ic-heart" viewBox="0 0 24 24" width="11" height="11" fill="none"
+               stroke="currentColor" stroke-width="2.3" stroke-linejoin="round">
+            <path d="M12 20.4 4.5 12.9a4.7 4.7 0 0 1 6.6-6.6l.9.9.9-.9a4.7 4.7 0 1 1 6.6 6.6z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="nptext">
+        <div class="nptitle" id="nptitle" data-open="track" title="在 Spotify 中打开这首歌">未在播放</div>
+        <button type="button" class="npwho" id="npArtist" data-open="artist"
+                title="在 Spotify 中打开歌手页">在 Spotify 里播点什么</button>
+        <button type="button" class="npwho npsub" id="npAlbum" data-open="album"
+                title="在 Spotify 中打开专辑详情"></button>
+      </div>
+      <div class="npctl">
+        <button class="npb" id="npPrev" title="上一首">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M7 5h2v14H7zM19 5v14l-9-7z"/>
+          </svg>
+        </button>
+        <button class="npb npmain" id="npPlay" title="播放 / 暂停">
+          <svg class="ic-play" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M8 4.5 19.5 12 8 19.5z"/>
+          </svg>
+          <svg class="ic-pause" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M7 4.5h3.6v15H7zM13.4 4.5H17v15h-3.6z"/>
+          </svg>
+        </button>
+        <button class="npb" id="npNext" title="下一首">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M15 5h2v14h-2zM5 5v14l9-7z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="npbar">
+      <span class="npt" id="npPos">0:00</span>
+      <div class="nptrack" id="nptrack"><i id="npfill"></i><b id="npknob"></b></div>
+      <span class="npt" id="npDur">0:00</span>
     </div>
   </div>
   </div>
@@ -158,6 +175,7 @@
           <div class="chead"><span>本月·5 号起 Token</span><b id="cmotop">--</b></div>
           <canvas id="cmo" class="spark"></canvas>
         </div>
+        <div class="mmix" id="mmix"></div>
       </div>
 
       <button class="fold sub" id="foldHeat">

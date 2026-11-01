@@ -645,17 +645,20 @@ function renderCurves(s) {
   });
   $('c5top').textContent = top5 == null ? '--' : '剩 ' + top5 + '%';
   $('cwtop').textContent = topW == null ? '--' : '剩 ' + topW + '%';
-  // 本月用量旁边顺手折算成钱：按配置的「每百万 token 美元价 × 汇率」估算
-  const perTok = s && s.costPerMTok > 0 ? s.costPerMTok : 2;
-  const fxRate = s && s.fxRate > 0 ? s.fxRate : 7.1;
-  const costText = (kTok) => {
-    if (!kTok) return '';
-    const cny = (kTok / 1000) * perTok * fxRate;
-    return '≈¥' + (cny >= 10 ? Math.round(cny) : cny.toFixed(1));
+  // 本月用量旁边顺手折算成钱：后端按 gpt-6.1-sol 官方价把输入/缓存/输出分开算好，直接报美元
+  const moCost = ht.monthCost || 0;
+  const usdText = (v) => (v > 0 ? '≈' + usdShort(v) : '');
+  const mdOf = (t) => {
+    const d = new Date(t);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
-  const moText = rmo.ready ? '共 ' + heatVal(moTotal) + ' · ' + costText(moTotal) : '统计中';
+  const moText = rmo.ready
+    ? '共 ' + heatVal(moTotal) + (moCost > 0 ? ' · ' + usdText(moCost) : '')
+    : '统计中';
   $('cmotop').textContent = moText;
   $('mosum').textContent = moText;
+  renderMix(rmo.ready ? ht : null);
 
   // 折叠行摘要只报「当前剩余」，不带正负号，避免误读成涨跌
   $('csum').textContent = `5h ${top5 == null ? '--' : top5 + '%'} · 周 ${topW == null ? '--' : topW + '%'}`;
@@ -678,8 +681,13 @@ function renderCurves(s) {
   if (cw) cw.title = tip(rw, wk, '周一 09:00 → 下周一 09:00 的曲线')
     + (u && u.weekly && u.weekly.resetAt ? '；周额度 ' + fmtRemain(u.weekly.resetAt - now) : '');
   if (cm) cm.title = rmo.ready
-    ? '本月 5 号起共用 ' + heatVal(moTotal) + ' token · ' + costText(moTotal)
-      + '（按 $' + perTok + '/M token、汇率 ' + fxRate + ' 估算，可在 codex-pet-config.json 里改）'
+    ? '本月（' + mdOf(rmo.from) + ' 起）共 ' + heatVal(moTotal) + ' token · ' + usdText(moCost)
+      + '\n输入 ' + heatVal((ht.monthIn || 0) / 1000)
+      + '（其中缓存命中 ' + heatVal((ht.monthCached || 0) / 1000) + '）'
+      + ' · 输出 ' + heatVal((ht.monthOut || 0) / 1000)
+      + mixRows(ht).map((m) => '\n' + (m.label || m.name) + '  ' + heatVal((m.tok || 0) / 1000)
+        + '  ' + usdShort(m.cost) + '  ' + Math.round((m.cost / (moCost || 1)) * 100) + '%').join('')
+      + '\n计价 ' + (ht.priceNote || 'gpt-6.1-sol 官方价 $2/$0.10/$10 per M')
     : '正在统计本月用量…';
 
   ['c5', 'cw', 'cmo'].forEach((id) => bindHover($(id)));
@@ -692,11 +700,70 @@ function renderCurves(s) {
 /* ---------- 活跃热力图 ---------- */
 function heatVal(k) {
   if (typeof k !== 'number' || !isFinite(k) || k <= 0) return '0';
+  if (k >= 1e6) return (k / 1e6).toFixed(2) + 'B';
   return k >= 1000 ? (k / 1000).toFixed(1) + 'M' : k + 'k';
 }
 
-function heatColor(t) {
-  if (t <= 0) return 'rgba(255, 255, 255, 0.045)';
+// 美元：>100 取整，>10 一位小数，其余两位
+function usdShort(v) {
+  if (!(v > 0)) return '$0';
+  if (v >= 100) return '$' + Math.round(v);
+  if (v >= 10) return '$' + v.toFixed(1);
+  return '$' + v.toFixed(2);
+}
+
+// 本月花费按模型分色：Sol 蓝、Terra 绿、Luna 紫、Astra 红，其余灰
+const MIX_COLOR = {
+  'gpt-6.1-sol': '#5b9dff',
+  'gpt-6.1-terra': '#3ddc97',
+  'gpt-6-luna': '#b98cff',
+  'gpt-6-sol': '#7fb0ff',
+  'gpt-5.6-sol': '#7fb0ff',
+  'gpt-5.6-terra': '#6fc9a8',
+  'gpt-5.6-luna': '#c3a6ff',
+  'gpt-6-astra': '#ff5c72',
+  'codex-auto-review': '#ffb648'
+};
+const mixColor = (name) => MIX_COLOR[name] || '#8a94a6';
+
+// 只列前 4 个型号，剩下的合并成「其他」，否则小面板放不下
+function mixRows(ht) {
+  const all = ((ht && ht.monthModels) || []).filter((m) => m && (m.cost > 0 || m.tok > 0));
+  const rows = all.slice(0, 4);
+  if (all.length > 4) {
+    const tail = all.slice(4);
+    rows.push({
+      name: '__other',
+      label: '其他 ' + tail.length + ' 个',
+      tok: tail.reduce((a, m) => a + (m.tok || 0), 0),
+      cost: tail.reduce((a, m) => a + (m.cost || 0), 0)
+    });
+  }
+  return rows;
+}
+
+function renderMix(ht) {
+  const box = $('mmix');
+  if (!box) return;
+  const rows = mixRows(ht);
+  if (!rows.length) { box.innerHTML = ''; return; }
+  const total = rows.reduce((a, m) => a + (m.cost || 0), 0) || 1;
+  const bars = rows.map((m) =>
+    `<i style="width:${((m.cost || 0) / total * 100).toFixed(2)}%;background:${mixColor(m.name)}"></i>`).join('');
+  const list = rows.map((m) => {
+    const pct = Math.round((m.cost || 0) / total * 100);
+    const estimate = m.priced === false ? ' title="该型号无官方价，按 Sol 档估算"' : '';
+    return `<div class="mrow"${estimate}>`
+      + `<i class="mdot" style="background:${mixColor(m.name)}"></i>`
+      + `<span class="mname">${m.label || m.name}</span>`
+      + `<span class="mtok">${heatVal((m.tok || 0) / 1000)}</span>`
+      + `<span class="mcost">${usdShort(m.cost)}</span>`
+      + `<span class="mpct">${pct}%</span></div>`;
+  }).join('');
+  box.innerHTML = '<div class="mbar">' + bars + '</div>' + list;
+}
+
+function heatColor(t) {  if (t <= 0) return 'rgba(255, 255, 255, 0.045)';
   const a = 0.1 + 0.9 * Math.min(1, t);
   return 'rgba(61, 220, 151, ' + a.toFixed(3) + ')';
 }
@@ -956,167 +1023,215 @@ $('doneBar').addEventListener('click', () => {
   }, 240);
 });
 
-/* ---------- 桌宠小人 ---------- */
-const petEl = $('petStrip');
-const petSay = $('petSay');
-const petSub = $('petSub');
-let petHoldUntil = 0;
-let petHoldMsg = null;
-let petBusySeen = 0;
+/* ---------- 正在播放（Spotify 风格播放器） ---------- */
+const npEl = $('np');
+const npImg = $('npimg');
+const npTitle = $('nptitle');
+const npArtist = $('npArtist');
+const npAlbum = $('npAlbum');
+const npFav = $('npFav');
+const npFill = $('npfill');
+const npKnob = $('npknob');
+const npPos = $('npPos');
+const npDur = $('npDur');
+const npTrack = $('nptrack');
+const npSum = $('npSum');
+const npPlay = $('npPlay');
+const npPrev = $('npPrev');
+const npNext = $('npNext');
 
-function petAccent() {
-  return mode === 'workbuddy' ? '#a78bfa' : mode === 'antigravity' ? '#5b9dff' : '#3ddc97';
+// 后端每 2 秒给一次快照，中间靠本地插值把进度跑顺
+let media = { on: false, app: '', title: '', artist: '', album: '', pos: 0, dur: 0, playing: false, canPrev: true, canNext: true };
+let mediaAt = 0;
+let mediaPos = 0;
+let mediaCover = '';
+
+function fmtT(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m + ':' + (s < 10 ? '0' + s : s);
 }
 
-function petMinQuota(s) {
-  const vals = [];
-  if (mode === 'codex' && s.usage) {
-    [s.usage.fiveHour, s.usage.weekly].forEach((w) => { if (w && typeof w.remaining === 'number') vals.push(w.remaining); });
-  } else if (mode === 'antigravity' && s.antigravity && s.antigravity.groups) {
-    s.antigravity.groups.forEach((g) => {
-      [g.weekly, g.fiveHour].forEach((q) => { if (q && typeof q.remaining === 'number') vals.push(q.remaining); });
-    });
-  }
-  return vals.length ? Math.min.apply(null, vals) : null;
+function currentPos() {
+  const base = mediaPos + (media.playing ? (Date.now() - mediaAt) / 1000 : 0);
+  if (media.dur > 0) return Math.min(Math.max(base, 0), media.dur);
+  return Math.max(base, 0);
 }
 
-function petBusy(s) {
-  if (mode === 'codex') return !!(s.session && (s.session.running || s.session.subRunning));
-  if (mode === 'workbuddy') return !!(s.wb && s.wb.running);
-  return Date.now() - petBusySeen < 8000;
+function paintProgress() {
+  const dur = media.dur > 0 ? media.dur : 0;
+  const p = currentPos();
+  const pct = dur > 0 ? Math.min(100, (p / dur) * 100) : 0;
+  npFill.style.width = pct.toFixed(2) + '%';
+  npKnob.style.left = pct.toFixed(2) + '%';
+  const t = fmtT(p);
+  if (npPos.textContent !== t) npPos.textContent = t;
+  const d = fmtT(dur);
+  if (npDur.textContent !== d) npDur.textContent = d;
 }
 
-function setPet(nextState, msg, sub) {
-  if (petEl.dataset.state !== nextState) petEl.dataset.state = nextState;
-  if (petEl.dataset.accent !== mode) petEl.dataset.accent = mode;
-  if (msg != null && petSay.textContent !== msg) petSay.textContent = msg;
-  const sum = $('petSum');
-  if (msg != null && sum && sum.textContent !== msg) sum.textContent = msg;
-  const t = sub == null ? '' : sub;
-  if (petSub.textContent !== t) petSub.textContent = t;
-}
-
-// 短时状态（完成 / 被摸头 / 递咖啡）：hold 一段时间，别被 5 秒一次的状态刷新冲掉
-function petHold(stateName, msg, sub, ms) {
-  petHoldUntil = Date.now() + (ms || 2000);
-  petHoldMsg = { state: stateName, msg, sub };
-  petEl.dataset.state = 'idle';       // 先复位，动画才会重播
-  void petEl.offsetWidth;
-  setPet(stateName, msg, sub);
-}
-
-function petReact(agent, label) {
-  const m = metaOf(agent);
-  petBusySeen = Date.now();
-  petHold('done', m.name + ' 交活了', label || '这一轮跑完了', 1900);
-}
-
-// 连续工作时长：每 2 小时递一杯咖啡（跨重启也记得，用 localStorage）
-const BUSY_SINCE = 'petBusySince';
-const BUSY_FREE = 5 * 60e3;          // 空闲超过 5 分钟就算这段连续工作结束
-const COFFEE_GAP = 2 * 3600e3;
-
-function lsNum(k) {
-  try { return parseInt(localStorage.getItem(k) || '0', 10) || 0; } catch (_) { return 0; }
-}
-function lsPut(k, v) {
-  try { localStorage.setItem(k, String(v)); } catch (_) {}
-}
-
-function trackBusy(busy) {
-  const now = Date.now();
-  const since = lsNum(BUSY_SINCE);
-  if (!busy) {
-    if (since && now - since > BUSY_FREE) lsPut(BUSY_SINCE, 0);
+function setCover(src) {
+  if (!src) {
+    mediaCover = '';
+    npEl.dataset.cover = '0';
     return;
   }
-  if (!since) { lsPut(BUSY_SINCE, now); return; }
-  const run = now - since;
-  if (run < COFFEE_GAP) return;
-  if (now - lsNum('petCoffeeAt') > COFFEE_GAP) {
-    lsPut('petCoffeeAt', now);
-    petHold('coffee', '喝口水吧', '已经连着跑了 ' + Math.round(run / 3600e3) + ' 小时', 6500);
+  if (src === mediaCover) return;
+  mediaCover = src;
+  npEl.dataset.cover = '0';          // 先露出占位，等图解码好再淡入，避免闪白
+  npImg.onload = () => {
+    npEl.dataset.cover = '1';
+    tintFromCover();
+  };
+  npImg.onerror = () => { npEl.dataset.cover = '0'; };
+  npImg.src = src;
+}
+
+// 从封面里取一个平均色，给封面铺一层同色光晕（Spotify 也是这么干的）
+function tintFromCover() {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 8;
+    c.height = 8;
+    const g = c.getContext('2d', { willReadFrequently: false });
+    g.drawImage(npImg, 0, 0, 8, 8);
+    const d = g.getImageData(0, 0, 8, 8).data;
+    let r = 0, gr = 0, b = 0;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; gr += d[i + 1]; b += d[i + 2]; }
+    const n = d.length / 4 || 1;
+    r = Math.round(r / n); gr = Math.round(gr / n); b = Math.round(b / n);
+    npEl.style.setProperty('--tint', 'rgb(' + r + ',' + gr + ',' + b + ')');
+  } catch (_) {}
+}
+
+function applyMedia(m) {
+  if (!m) return;
+  const wasTrack = media.title + '\u0001' + media.artist;
+  media = {
+    on: !!m.on,
+    app: m.app || '',
+    title: m.title || '',
+    artist: m.artist || '',
+    album: m.album || '',
+    pos: typeof m.pos === 'number' ? m.pos : 0,
+    dur: typeof m.dur === 'number' ? m.dur : 0,
+    playing: !!m.playing,
+    canPrev: m.canPrev !== false,
+    canNext: m.canNext !== false
+  };
+  mediaAt = m.at || Date.now();
+  mediaPos = media.pos;
+
+  if (!media.on) setCover('');
+  else if (m.cover) setCover(m.cover);   // 只有换歌时后端才带封面
+
+  npEl.dataset.on = media.on ? '1' : '0';
+  npEl.dataset.playing = media.on && media.playing ? '1' : '0';
+  // 收藏走的是 Spotify 的快捷键，别的播放器就别显示了
+  npEl.dataset.canfav = media.on && /spotify/i.test(media.app) ? '1' : '0';
+
+  const title = media.on ? (media.title || '未知曲目') : '未在播放';
+  if (npTitle.textContent !== title) npTitle.textContent = title;
+  npTitle.title = media.on ? [media.title, media.album].filter(Boolean).join(' · ') : '';
+
+  const artist = media.on ? (media.artist || media.app || '') : '在 Spotify 里播点什么';
+  if (npArtist.textContent !== artist) npArtist.textContent = artist;
+  npArtist.title = media.on && media.artist ? '在 Spotify 中打开歌手：' + media.artist : '';
+
+  // 歌手下面那行专辑名：没有专辑信息时整行收起来，不留一条空线
+  const album = media.on ? media.album : '';
+  if (npAlbum.textContent !== album) npAlbum.textContent = album;
+  npAlbum.title = album ? '在 Spotify 中打开专辑：' + album : '';
+  npEl.dataset.hasalbum = album ? '1' : '0';
+
+  npPrev.disabled = !media.on || !media.canPrev;
+  npNext.disabled = !media.on || !media.canNext;
+
+  const sum = media.on
+    ? (media.title ? media.title + (media.artist ? ' · ' + media.artist : '') : (media.app || '播放中'))
+    : '未在播放';
+  if (npSum.textContent !== sum) npSum.textContent = sum;
+
+  paintProgress();
+
+  // 换歌时封面还在路上，把占位图标轻轻抖一下，别像卡住了
+  if (media.on && wasTrack !== media.title + '\u0001' + media.artist) {
+    npEl.dataset.liked = '0';
+    npFav.title = '收藏到「我喜欢的音乐」';
+    npEl.classList.remove('npnew');
+    void npEl.offsetWidth;
+    npEl.classList.add('npnew');
   }
 }
 
-function updatePet(s) {
-  if (!s || !petEl) return;
-  const busy = petBusy(s);
-  if (busy) petBusySeen = Date.now();
-  trackBusy(busy);
+npPlay.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!media.on) return;
+  // 乐观切换，图标别等后端回推才变
+  const p = currentPos();
+  mediaPos = p;
+  mediaAt = Date.now();
+  media.playing = !media.playing;
+  npEl.dataset.playing = media.playing ? '1' : '0';
+  window.pet.mediaToggle();
+});
 
-  if (petHoldMsg && Date.now() < petHoldUntil) {
-    setPet(petHoldMsg.state || 'done', petHoldMsg.msg, petHoldMsg.sub);
-    return;
-  }
-  petHoldMsg = null;
+npPrev.addEventListener('click', (e) => { e.stopPropagation(); if (!npPrev.disabled) window.pet.mediaPrev(); });
+npNext.addEventListener('click', (e) => { e.stopPropagation(); if (!npNext.disabled) window.pet.mediaNext(); });
 
-  const low = petMinQuota(s);
-  if (low != null && low < 10) {
-    // 见底了就别装淡定了：蹲下抱头
-    setPet('hug', '抱头…', '只剩 ' + Math.round(low) + '%，省着点用');
-    return;
-  }
+// 点进度条任意位置跳转
+npTrack.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!media.on || !(media.dur > 0)) return;
+  const r = npTrack.getBoundingClientRect();
+  const pct = Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || 1)));
+  const target = pct * media.dur;
+  mediaPos = target;
+  mediaAt = Date.now();
+  paintProgress();
+  window.pet.mediaSeek(target);
+});
 
-  // 凌晨 1 点后还在干活：打着瞌睡干活，比"干活中"更真实
-  const hh = new Date().getHours();
-  if (busy && hh >= 1 && hh < 5) {
-    setPet('sleep', '打瞌睡了…', '凌晨 ' + hh + ' 点还在跑');
-    return;
-  }
-
-  if (busy) {
-    let sub = '正在输出';
-    if (mode === 'codex' && s.session) {
-      const ss = s.session;
-      if (ss.subRunning) sub = '子代理' + (ss.subNick ? ' ' + ss.subNick : '') + ' 在跑';
-      else if (ss.model) sub = modelText(ss.model, ss.effort).replace(/\s*中$/, '') + ' 正在输出';
-    } else if (mode === 'workbuddy' && s.wb) {
-      sub = '今日 ' + (s.wb.todayReq || 0) + ' 次调用';
+// 收藏：转发 Spotify 的 Alt+Shift+B，按完它自己的播放条会变成绿色对勾
+npFav.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (!media.on || npFav.dataset.busy === '1') return;
+  npFav.dataset.busy = '1';
+  const want = npEl.dataset.liked !== '1';
+  try {
+    const r = await window.pet.mediaLike();
+    if (!r || r.ok === false) {
+      npFav.classList.remove('fail');
+      void npFav.offsetWidth;
+      npFav.classList.add('fail');
+      return;
     }
-    setPet('work', '干活中…', sub);
-    return;
+    npEl.dataset.liked = want ? '1' : '0';
+    npFav.title = want ? '已加入「我喜欢」，再点一次取消' : '收藏到「我喜欢的音乐」';
+    npFav.classList.remove('pop');
+    void npFav.offsetWidth;
+    npFav.classList.add('pop');
+  } catch (_) {
+  } finally {
+    npFav.dataset.busy = '0';
   }
-
-  let sub = '';
-  if (mode === 'codex' && s.session) sub = s.session.lastActiveAt ? '上次活动 ' + fmtAgo(s.session.lastActiveAt) : '';
-  else if (mode === 'antigravity') sub = '等 Antigravity 派活';
-  else if (mode === 'workbuddy' && s.wb) sub = '今日 ' + (s.wb.sessions || 0) + ' 个会话';
-  setPet('idle', '待命中', sub);
-}
-
-// 眼睛的眨眼延迟随机化，别每次都同时眨
-document.querySelectorAll('.petstrip .peye').forEach((e) => {
-  e.style.animationDelay = (-Math.random() * 6.4).toFixed(2) + 's';
 });
 
-/* ---------- 点一下 / 双击摸头 ---------- */
-const PET_TICKLE = ['嗷，好痒', '别戳我啦', '痒痒的…', '再点就要收钱了'];
-const PET_PAT = ['嘿嘿…', '害羞了', '摸头收到', '再摸一下也行'];
-let patCount = lsNum('petPats');
-
-function refreshPetTitle() {
-  petEl.title = patCount > 0 ? '点我一下 · 已被摸头 ' + patCount + ' 次' : '点我一下';
-}
-refreshPetTitle();
-
-let petClickTimer = null;
-petEl.addEventListener('click', () => {
-  // 双击 = 摸头：脸红 + 计数；单击 = 嫌痒
-  if (petClickTimer) {
-    clearTimeout(petClickTimer);
-    petClickTimer = null;
-    patCount += 1;
-    lsPut('petPats', patCount);
-    refreshPetTitle();
-    petHold('shy', PET_PAT[patCount % PET_PAT.length], '已被摸头 ' + patCount + ' 次', 1900);
-    return;
-  }
-  petClickTimer = setTimeout(() => {
-    petClickTimer = null;
-    petHold('idle', PET_TICKLE[Math.floor(Math.random() * PET_TICKLE.length)], '点我不会加快速度', 1400);
-  }, 230);
+// 点整行 → 跳到 Spotify；点歌手 / 专辑各有各的落点；按钮和进度条自己管自己
+npEl.addEventListener('click', (e) => {
+  if (!media.on) return;
+  if (e.target.closest('.npb') || e.target.closest('.npbar')) return;
+  const hit = e.target.closest('[data-open]');
+  window.pet.mediaOpen(hit ? hit.dataset.open : 'track');
 });
+
+// 播放器里的按钮别触发卡片拖动
+npEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+setInterval(() => { if (media.on) paintProgress(); }, 100);
+
+window.pet.onMedia((m) => { if (!window.__npFreeze) applyMedia(m); });
 
 /* ---------- 头部同步 ---------- */
 function syncHeader() {
@@ -1177,7 +1292,6 @@ function render(s) {
   renderWb(s);
   renderCurves(s);
   syncHeader();
-  updatePet(s);
   syncHeatHeader(s);
   onDoneEvents(s);
   syncHeight();
@@ -1197,7 +1311,6 @@ function setMode(next, notify) {
   syncHeader();
   renderCurves(state || {});
   renderWb(state || {});
-  updatePet(state || {});
   if (heatOpen) renderHeat(state || {});
   syncHeight();
   if (notify) pushView();
@@ -1341,3 +1454,5 @@ window.pet.getState().then((s) => {
   applyCollapsed(!!(s && s.collapsed), false);
   setTimeout(syncHeight, 60);
 });
+// 首帧可能比宿主的第一条推送还早，主动要一次当前播放状态
+window.pet.getMedia().then((m) => { if (m) applyMedia(m); }).catch(() => {});

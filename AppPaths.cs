@@ -20,6 +20,8 @@ public static class AppPaths
         ? env
         : Path.Combine(Home, ".codex");
     public static string SessionsDir => Path.Combine(CodexHome, "sessions");
+    // Codex 会把旧会话压成 .jsonl.zst 移到 archived_sessions，只读 sessions 会漏掉大半个月
+    public static string ArchivedDir => Path.Combine(CodexHome, "archived_sessions");
     public static string WbProjects => Path.Combine(Home, ".workbuddy", "projects");
     public static string LogFile => Path.Combine(Path.GetTempPath(), "codex-pet.log");
 }

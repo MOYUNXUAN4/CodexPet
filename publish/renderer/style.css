@@ -357,6 +357,68 @@ html, body {
 .fold.sub .fsum { font-size: 9px; }
 .foldbody.sub { padding-top: 5px; }
 
+/* 本月花费构成：一条按花费占比的细条 + 每个型号一行 */
+.mmix {
+  margin: 4px 1px 0;
+  padding: 5px 6px 5px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.mmix:empty { display: none; }
+.mmix .mbar {
+  display: flex;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  margin-bottom: 5px;
+}
+.mmix .mbar i { display: block; height: 100%; }
+.mmix .mrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 8.5px;
+  line-height: 12px;
+  color: #93a8c2;
+  white-space: nowrap;
+  text-align: left;
+}
+.mmix .mdot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 1.5px;
+}
+.mmix .mname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  color: #c6d4e6;
+}
+.mmix .mtok {
+  flex: none;
+  width: 42px;
+  text-align: right;
+  color: #7f93ab;
+}
+.mmix .mcost {
+  flex: none;
+  width: 40px;
+  text-align: right;
+  font-weight: 600;
+  color: #e8eef7;
+}
+.mmix .mpct {
+  flex: none;
+  width: 26px;
+  text-align: right;
+  color: #6d7f95;
+}
+
 .fgrid {
   display: flex;
   gap: 6px;
@@ -643,256 +705,245 @@ body.wb .name { letter-spacing: 0.9px; font-size: 9.5px; }
 #collapse svg { transition: transform 0.25s ease; }
 .app.collapsed #collapse svg { transform: rotate(180deg); }
 
-/* ---------- 桌宠小人 ---------- */
+/* ---------- 正在播放（Spotify 风格播放器） ---------- */
 .petfold { margin-top: -1px; }
-.petbody { padding-top: 4px; }
+.petfold .flab { flex: none; }
+/* 歌名 + 歌手经常很长，宁可省略也别把箭头挤掉 */
+#npSum { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.petbody { padding-top: 5px; }
 #petBody.open { padding-bottom: 7px; }
-.petstrip {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 58px;
-  margin: 0 0 6px;
-  --petc: #3ddc97;
-}
-.petsvg {
-  flex: none;
-  width: 54px;
-  height: 50px;
-  overflow: visible;
-}
-.pbody, .ptip { fill: var(--petc); transition: fill 0.35s ease; }
-.pwire { stroke: var(--petc); stroke-width: 2; fill: none; transition: stroke 0.35s ease; }
-.peye { fill: #f2fbf7; transform-box: fill-box; transform-origin: center; animation: petBlink 6.4s infinite; }
-.pmouth, .psmile, .psad {
-  fill: none; stroke: #f2fbf7; stroke-width: 2.2;
-  stroke-linecap: round; stroke-linejoin: round;
-}
-.psmile, .psad { opacity: 0; }
-.parm { fill: var(--petc); transform-box: fill-box; transition: transform 0.28s ease; }
-.parm.al { transform-origin: 100% 50%; }
-.parm.ar { transform-origin: 0% 50%; }
-.pkeys { fill: #5f6c7e; opacity: 0; }
-.psweat { fill: #85b7eb; opacity: 0; }
-.pbadge { fill: #4ee0a0; opacity: 0; }
-.ptick { fill: none; stroke: #101620; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
-.pbob { transform-origin: 50% 100%; animation: petBreathe 3.6s ease-in-out infinite; }
 
-.pettalk {
-  flex: 1;
-  min-width: 0;
+.np {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 5px 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--line);
+  gap: 5px;
+  --sp: #1db954;
+  --tint: rgb(29, 185, 84);
+}
+
+.nprow { display: flex; align-items: center; gap: 7px; height: 46px; }
+
+.npcov {
   position: relative;
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #23282f, #171b21);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 4px 10px rgba(0, 0, 0, 0.45);
+  transition: box-shadow 0.45s ease;
 }
-.pettalk::before {
-  content: '';
+.npcov img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transform: scale(1.08);
+  transition: opacity 0.35s ease, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.np[data-cover="1"] .npcov img { opacity: 1; transform: scale(1); }
+.npfall {
   position: absolute;
-  left: -4px; top: 50%;
-  margin-top: -3px;
-  border-top: 3px solid transparent;
-  border-bottom: 3px solid transparent;
-  border-right: 4px solid rgba(255, 255, 255, 0.09);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #49525f;
+  transition: opacity 0.3s ease;
 }
-.pettalk b {
-  font-size: 9.5px;
+.np[data-cover="1"] .npfall { opacity: 0; }
+.np[data-cover="1"] .npcov { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 6px 14px -6px var(--tint), 0 4px 10px rgba(0, 0, 0, 0.4); }
+/* 播放中：封面的专辑主色往外洇一点，像打在桌面上的光 */
+.np[data-playing="1"][data-cover="1"] .npcov {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 7px 20px -5px var(--tint), 0 4px 10px rgba(0, 0, 0, 0.42);
+}
+
+.nptext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.nptitle {
+  font-size: 10.5px;
   font-weight: 600;
-  color: #c8d5e6;
-  letter-spacing: 0.2px;
-}
-.pettalk span {
-  font-size: 8.5px;
-  color: var(--dim);
+  line-height: 12px;
+  color: #eef4fb;
+  letter-spacing: 0.1px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.15s ease;
 }
 
-.petstrip[data-accent="antigravity"] { --petc: #5b9dff; }
-.petstrip[data-accent="workbuddy"] { --petc: #a78bfa; }
-.petstrip[data-state="work"] { --petc: #3ddc97; }
-.petstrip[data-state="work"] .pkeys { opacity: 1; }
-.petstrip[data-state="work"] .parm.al { animation: petTypeL 0.34s ease-in-out infinite alternate; }
-.petstrip[data-state="work"] .parm.ar { animation: petTypeR 0.34s ease-in-out infinite alternate; }
-.petstrip[data-state="work"] .pbob { animation: petBob 0.6s ease-in-out infinite alternate; }
-.petstrip[data-state="work"] .pettalk b { color: #8fe9bf; }
+/* 歌手 / 专辑：长得像文字，但都是通往 Spotify 的入口 */
+.npwho {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9px;
+  line-height: 11px;
+  color: #8b97a9;
+  transition: color 0.14s ease;
+}
+.npsub { font-size: 8.6px; line-height: 10px; color: #6d7889; }
+.np[data-hasalbum="0"] .npsub { display: none; }
 
-/* 状态色要盖住 accent 色：写在同一层，靠顺序取胜 */
-.petstrip[data-state="done"] { --petc: #4ee0a0; }
-.petstrip[data-state="done"] .pmouth { opacity: 0; }
-.petstrip[data-state="done"] .psmile { opacity: 1; }
-.petstrip[data-state="done"] .pbadge,
-.petstrip[data-state="done"] .ptick { opacity: 1; }
-.petstrip[data-state="done"] .parm.al { transform: rotate(58deg); }
-.petstrip[data-state="done"] .parm.ar { transform: rotate(-58deg); }
-.petstrip[data-state="done"] .pbob { animation: petHop 0.85s cubic-bezier(0.28, 1.3, 0.5, 1); }
-.petstrip[data-state="done"] .pettalk b { color: #4ee0a0; }
+.np[data-on="1"] [data-open] { cursor: pointer; }
+.np[data-on="1"] .nptitle:hover { color: #ffffff; }
+.np[data-on="1"] .npwho:hover { color: #eaf2fb; text-decoration: underline; text-underline-offset: 2px; }
+.np[data-on="1"] .npsub:hover { color: #cbd7e6; }
 
-.petstrip[data-state="low"] { --petc: #ff5c72; }
-.petstrip[data-state="low"] .pmouth { opacity: 0; }
-.petstrip[data-state="low"] .psad { opacity: 1; }
-.petstrip[data-state="low"] .psweat { opacity: 1; }
-.petstrip[data-state="low"] .peye { opacity: 0; animation: none; }
-.petstrip[data-state="low"] .pbob { animation: petShiver 0.42s ease-in-out infinite; }
-.petstrip[data-state="low"] .pettalk { border-color: rgba(255, 92, 114, 0.28); }
-.petstrip[data-state="low"] .pettalk b { color: #ff8a9a; }
+.np[data-on="0"] .nptitle { color: #7c889a; font-weight: 500; }
+.np[data-on="0"] .npwho { color: #59637a; }
 
-/* 额度 < 10%：蹲下抱头，不用看数字也知道不行了 */
-.pblush { fill: #ff8fb8; opacity: 0; transition: opacity 0.25s ease; }
-.petstrip[data-state="hug"] { --petc: #ff5c72; }
-.petstrip[data-state="hug"] .peye { opacity: 0; animation: none; }
-.petstrip[data-state="hug"] .pmouth { opacity: 0; }
-.petstrip[data-state="hug"] .psad { opacity: 1; }
-.petstrip[data-state="hug"] .psweat { opacity: 1; }
-.petstrip[data-state="hug"] .parm.al { transform: translate(10px, -14px) rotate(-26deg); }
-.petstrip[data-state="hug"] .parm.ar { transform: translate(-10px, -14px) rotate(26deg); }
-.petstrip[data-state="hug"] .pbob { animation: petCrouch 0.5s ease-in-out infinite alternate; }
-.petstrip[data-state="hug"] .pettalk { border-color: rgba(255, 92, 114, 0.3); }
-.petstrip[data-state="hug"] .pettalk b { color: #ff8a9a; }
+.npctl { flex: none; display: flex; align-items: center; gap: 1px; }
+.npb {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa7b8;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease, transform 0.12s ease;
+}
+.npb:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+.npb:active { transform: scale(0.9); }
+.npb:disabled { color: #414855; background: transparent; cursor: default; }
+.npb svg { display: block; }
 
-/* 双击摸头：脸红、眯眼笑、手抬起来捂脸 */
-.petstrip[data-state="shy"] { --petc: #ff9ec4; }
-.petstrip[data-state="shy"] .peye { opacity: 0; animation: none; }
-.petstrip[data-state="shy"] .pmouth { opacity: 0; }
-.petstrip[data-state="shy"] .psmile { opacity: 1; }
-.petstrip[data-state="shy"] .pblush { opacity: 1; }
-.petstrip[data-state="shy"] .parm.al { transform: rotate(-52deg); }
-.petstrip[data-state="shy"] .parm.ar { transform: rotate(52deg); }
-.petstrip[data-state="shy"] .pbob { animation: petWiggle 0.62s ease-in-out 2; }
-.petstrip[data-state="shy"] .pettalk { border-color: rgba(255, 158, 196, 0.3); }
-.petstrip[data-state="shy"] .pettalk b { color: #ffb3d0; }
+.npmain {
+  width: 24px;
+  height: 24px;
+  background: var(--sp);
+  color: #06180c;
+  box-shadow: 0 2px 8px rgba(29, 185, 84, 0.3);
+}
+.npmain:hover { background: #1ed760; color: #06180c; box-shadow: 0 2px 12px rgba(29, 185, 84, 0.5); }
+.np[data-playing="0"] .npmain { background: rgba(255, 255, 255, 0.13); color: #e6edf6; box-shadow: none; }
+.np[data-playing="0"] .npmain:hover { background: rgba(255, 255, 255, 0.2); }
+.np[data-on="0"] .npmain { background: rgba(255, 255, 255, 0.07); color: #6f7a8a; box-shadow: none; }
+.np[data-on="0"] .npmain:hover { background: rgba(255, 255, 255, 0.07); }
 
-/* 凌晨还在跑：闭眼打瞌睡，头顶冒 zzz */
-.petstrip[data-state="sleep"] { --petc: #6f7f96; }
-.petstrip[data-state="sleep"] .peye { opacity: 0.55; animation: none; transform: scaleY(0.12); }
-.petstrip[data-state="sleep"] .pmouth { opacity: 1; }
-.petstrip[data-state="sleep"] .pbob { animation: petSleep 5.2s ease-in-out infinite; }
-.petstrip[data-state="sleep"] .pettalk b { color: #9fb0c6; }
-.pzzz,
-.pcup { position: absolute; pointer-events: none; }
-.pzzz { left: 33px; top: 0; width: 24px; height: 22px; opacity: 0; transition: opacity 0.3s ease; }
-.pzzz i {
+.npb .ic-pause { display: none; }
+.np[data-playing="1"] .npb .ic-play { display: none; }
+.np[data-playing="1"] .npb .ic-pause { display: block; }
+
+.npbar { display: flex; align-items: center; gap: 6px; }
+.npt {
+  flex: none;
+  font-size: 8.5px;
+  line-height: 10px;
+  color: #6b7688;
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.2s ease;
+}
+.np[data-on="1"] .npt { color: #7d8a9c; }
+
+.nptrack {
+  position: relative;
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  cursor: pointer;
+  transition: height 0.16s ease, background 0.16s ease;
+}
+/* 细条也要点得中：上下各扩 6px 的可点区域 */
+.nptrack::after { content: ''; position: absolute; left: 0; right: 0; top: -6px; bottom: -6px; }
+.nptrack:hover { height: 4px; background: rgba(255, 255, 255, 0.14); }
+#npfill {
   position: absolute;
   left: 0;
-  bottom: 0;
-  font-style: normal;
-  font-weight: 700;
-  font-size: 8px;
-  color: #a9c2e0;
-  opacity: 0;
+  top: 0;
+  width: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sp);
 }
-.pzzz i:nth-child(2) { left: 5px; font-size: 10px; }
-.pzzz i:nth-child(3) { left: 12px; font-size: 13px; }
-.petstrip[data-state="sleep"] .pzzz { opacity: 1; }
-.petstrip[data-state="sleep"] .pzzz i { animation: petZzz 2.4s ease-in-out infinite; }
-.petstrip[data-state="sleep"] .pzzz i:nth-child(2) { animation-delay: 0.8s; }
-.petstrip[data-state="sleep"] .pzzz i:nth-child(3) { animation-delay: 1.6s; }
-
-/* 连续两小时：递一杯咖啡 */
-.pcup {
-  left: 45px;
-  top: 31px;
-  width: 10px;
-  height: 9px;
-  opacity: 0;
-  border: 1.4px solid #c9a06a;
-  border-top: none;
-  border-radius: 0 0 3px 3px;
-  background: linear-gradient(#6b4a2a, #43301e);
-  transition: opacity 0.3s ease;
-}
-.pcup::after {
-  content: '';
+.np[data-playing="0"] #npfill { background: #5d6a7d; }
+#npknob {
   position: absolute;
-  right: -4.5px;
-  top: 1px;
-  width: 3.5px;
-  height: 5px;
-  border: 1.4px solid #c9a06a;
-  border-left: none;
-  border-radius: 0 3px 3px 0;
-}
-.psteam {
-  position: absolute;
-  left: 2.5px;
-  top: -8px;
-  width: 2px;
-  height: 6px;
-  border-radius: 1px;
-  background: rgba(200, 215, 230, 0.55);
+  top: 50%;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%) scale(0.4);
   opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
 }
-.petstrip[data-state="coffee"] .pcup { opacity: 1; }
-.petstrip[data-state="coffee"] .psteam { animation: petSteam 1.5s ease-in-out infinite; }
-.petstrip[data-state="coffee"] .pmouth { opacity: 0; }
-.petstrip[data-state="coffee"] .psmile { opacity: 1; }
-.petstrip[data-state="coffee"] .parm.ar { transform: rotate(26deg) translateY(-2px); }
-.petstrip[data-state="coffee"] .pbob { animation: petHop 0.8s ease-out; }
-.petstrip[data-state="coffee"] .pettalk b { color: #e8c9a0; }
-
-@keyframes petCrouch {
-  from { transform: translateY(4.6px) scaleY(0.9); }
-  to { transform: translateY(6.2px) scaleY(0.87); }
+.nptrack:hover #npknob { opacity: 1; transform: translateY(-50%) scale(1); }
+.np[data-on="0"] .nptrack { cursor: default; }
+.np[data-on="0"] .nptrack:hover { height: 3px; background: rgba(255, 255, 255, 0.09); }
+.np[data-on="0"] .nptrack:hover #npknob { opacity: 0; }
+/* 收藏按钮：压在封面右下角，平时淡淡的，鼠标到这一行才完全浮出来 */
+.npfav {
+  position: absolute;
+  right: 1.5px;
+  bottom: 1.5px;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 14, 19, 0.66);
+  color: #d3dde9;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.22, 1.36, 0.36, 1),
+              background 0.18s ease, color 0.18s ease;
 }
-@keyframes petWiggle {
-  0%, 100% { transform: rotate(0deg); }
-  30% { transform: rotate(-5deg); }
-  70% { transform: rotate(5deg); }
+.np[data-on="1"][data-canfav="1"] .npfav { opacity: 0.7; transform: none; }
+.np[data-on="1"][data-canfav="1"] .nprow:hover .npfav { opacity: 1; }
+.np[data-on="1"][data-canfav="1"] .npfav:hover { background: rgba(29, 185, 84, 0.92); color: #fff; }
+.np[data-liked="1"] .npfav {
+  opacity: 1;
+  background: #1db954;
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(29, 185, 84, 0.55), 0 2px 9px rgba(29, 185, 84, 0.42);
+  transform: none;
 }
-@keyframes petSleep {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(2.6px); }
+.np[data-liked="1"] .ic-heart { fill: currentColor; }
+.npfav.pop { animation: favPop 0.45s cubic-bezier(0.22, 1.5, 0.4, 1); }
+@keyframes favPop {
+  0% { transform: scale(0.6); }
+  55% { transform: scale(1.3); }
+  100% { transform: scale(1); }
 }
-@keyframes petZzz {
-  0% { opacity: 0; transform: translate(0, 2px) scale(0.8); }
-  30% { opacity: 0.95; }
-  100% { opacity: 0; transform: translate(3px, -9px) scale(1.1); }
-}
-@keyframes petSteam {
-  0% { opacity: 0; transform: translateY(2px); }
-  40% { opacity: 0.75; }
-  100% { opacity: 0; transform: translateY(-5px); }
-}
-
-@keyframes petBreathe {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(1.4px); }
-}
-@keyframes petBob {
-  from { transform: translateY(0); }
-  to { transform: translateY(1.8px); }
-}
-@keyframes petHop {
-  0% { transform: translateY(0); }
-  32% { transform: translateY(-7px); }
-  60% { transform: translateY(0.6px); }
-  76% { transform: translateY(-2.4px); }
-  100% { transform: translateY(0); }
-}
-@keyframes petShiver {
+.npfav.fail { animation: favFail 0.4s ease; }
+@keyframes favFail {
   0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-0.8px); }
-  75% { transform: translateX(0.8px); }
+  30% { transform: translateX(-2px); }
+  70% { transform: translateX(2px); }
 }
-@keyframes petTypeL {
-  from { transform: rotate(-38deg); }
-  to { transform: rotate(-54deg); }
+
+/* 换歌时封面弹一下，说明"确实换了" */
+.np.npnew .npcov { animation: npPop 0.5s cubic-bezier(0.22, 1.36, 0.36, 1); }
+@keyframes npPop {
+  0% { transform: scale(0.88); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
 }
-@keyframes petTypeR {
-  from { transform: rotate(54deg); }
-  to { transform: rotate(38deg); }
-}
-@keyframes petBlink {
-  0%, 91%, 100% { transform: scaleY(1); }
-  93.5%, 96% { transform: scaleY(0.12); }
-}
-.app.collapsed .petstrip { display: none; }
+
+.app.collapsed .np { display: none; }
 
 /* ---------- 活跃热力图 ---------- */
 .heatwrap {

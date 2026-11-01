@@ -26,6 +26,8 @@ public sealed class MainForm : Form
 
     private readonly DataService _data;
     private readonly PetConfig _cfg;
+    private readonly MediaWatcher _media = MediaWatcher.Shared;
+    private string _linkKey = "";   // 上一次预热过的 歌手/专辑，换歌时才重新查
     private readonly string _captureBase;
     private readonly string _dumpPath;
     private WebView2 _webView;
@@ -38,6 +40,9 @@ public sealed class MainForm : Form
     private bool _hotkeyOk;
     private string _hotkeyText = "Ctrl+Alt+P";
     private CoreWebView2 _core;
+    // 右键菜单只在下一次弹出/关闭窗口时释放：如果在 Closed 里立刻 Dispose，
+    // ToolStripManager 还握着引用，下次激活切换会 SetVisibleCore 到已释放对象上，整个进程崩掉
+    private ContextMenuStrip _ctxMenu;
 
     /* ---------------- 全局热键 ---------------- */
     private const int WmHotkey = 0x0312;
@@ -86,10 +91,28 @@ public sealed class MainForm : Form
         _tray = BuildTray();
         _data.Changed += OnDataChanged;
         Load += OnLoad;
+        DpiChanged += (_, _) => BeginInvoke(new Action(FixWidthForDpi));
         FormClosed += OnClosed;
     }
 
     private double UiScale => DeviceDpi / 96.0;
+
+    // 显示器 DPI 变了（换屏 / 拖到另一块屏）就按新比例重设宽度，页面才不会被裁
+    private void FixWidthForDpi()
+    {
+        try
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            var want = (int)Math.Round(BaseWidth * UiScale);
+            if (want > 0 && Math.Abs(Width - want) > 1)
+            {
+                Log.Write($"dpi width fix {Width} -> {want} dpi={DeviceDpi}");
+                SetBounds(Left, Top, want, Height);
+                ApplyRoundedRegion();
+            }
+        }
+        catch (Exception ex) { Log.Write("dpi fix: " + ex.Message); }
+    }
 
     // 截图 / 导出实例只借用界面，绝不能把布局写回用户配置
     private bool Ephemeral => _captureBase != null || _dumpPath != null;
@@ -113,8 +136,18 @@ public sealed class MainForm : Form
             x = wa.Right - w - 32;
             y = wa.Bottom - h - 32;
         }
+        // 上次退出时顶部可能被顶到屏幕外（比如内容比屏还高的瞬间），回来时先拉进来
+        if (y < wa.Top)
+        {
+            Log.Write($"clamp top {y} -> {wa.Top}");
+            y = wa.Top;
+            _cfg.Y = y;
+        }
         SetBounds(x, y, w, h);
         ApplyRoundedRegion();
+        // 目标显示器不是 100% 时，SetBounds 之后 DeviceDpi 才切过去；宽度必须按新 DPI 重算，
+        // 否则网页按 292 DIP 排版、视口只有 240 DIP，右边会被整块裁掉（本月金额就是这么被切掉的）
+        BeginInvoke(new Action(FixWidthForDpi));
         try { RegisterHotkeys(); }
         catch (Exception ex) { Log.Write("hotkey: " + ex.Message); }
         Log.Write($"load bounds={x},{y} {w}x{h} dpi={DeviceDpi}");
@@ -132,6 +165,10 @@ public sealed class MainForm : Form
         }
         InitWebViewAsync();
         _ = _data.StartAsync(_cts.Token);
+
+        // 播放器：订阅系统媒体会话，界面收起时也照常轮询（展开就是最新状态）
+        _media.Changed += OnMediaChanged;
+        _media.Start();
     }
 
     private void ApplyRoundedRegion()
@@ -266,6 +303,7 @@ public sealed class MainForm : Form
                 Log.Write($"nav completed ok={ev.IsSuccess} err={ev.WebErrorStatus} webDisposed={_webView.IsDisposed}");
                 _ready = true;
                 PushState();
+                PushMedia();
                 if (_captureBase != null) RunCaptures();
                 if (_dumpPath != null) RunDump();
             };
@@ -306,6 +344,33 @@ public sealed class MainForm : Form
             UpdateTray();
         }
         catch { }
+    }
+
+    /* ---------------- 播放器 ---------------- */
+
+    private void OnMediaChanged(MediaInfo info)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        try { BeginInvoke(new Action(PushMedia)); } catch { }
+    }
+
+    public void PushMedia()
+    {
+        if (_core == null) return;
+        try
+        {
+            var cur = _media.Current;
+            // 换歌时顺手把歌手页/专辑页查好，点下去不用等网络
+            var key = cur.Artist + "\u0001" + cur.Album;
+            if (key != _linkKey)
+            {
+                _linkKey = key;
+                SpotifyLink.PreResolve(cur.Artist, cur.Album);
+            }
+            var payload = JsonSerializer.Serialize(new { type = "media", media = cur }, JsonOpts);
+            _core.PostWebMessageAsJson(payload);
+        }
+        catch (Exception ex) { Log.Write("media push: " + ex.Message); }
     }
 
     private void Reply(int id, JsonElement result)
@@ -372,9 +437,64 @@ public sealed class MainForm : Form
                 case "menu":
                     ShowContextMenu(args);
                     break;
+
+                case "get-media":
+                    Reply(id, JsonSerializer.SerializeToElement(_media.Current, JsonOpts));
+                    break;
+
+                case "media-toggle":
+                    MediaCommand("toggle", args);
+                    break;
+
+                case "media-next":
+                    MediaCommand("next", args);
+                    break;
+
+                case "media-prev":
+                    MediaCommand("prev", args);
+                    break;
+
+                case "media-seek":
+                    MediaCommand("seek", args);
+                    break;
+
+                case "media-like":
+                {
+                    // 要抢一下 Spotify 的前台才能按键，别堵 UI 线程
+                    var rl = id;
+                    _ = Task.Run(() =>
+                    {
+                        var ok = SpotifyLink.SendLike();
+                        if (rl == 0) return;
+                        try { BeginInvoke(new Action(() => Reply(rl, JsonSerializer.SerializeToElement(new { ok })))); } catch { }
+                    });
+                    break;
+                }
+
+                case "media-open":
+                    // 反查 + 拉起 Spotify 都别堵 UI 线程
+                    SpotifyLink.Open(args.ValueKind == JsonValueKind.String ? args.GetString() : "track", _media.Current);
+                    break;
             }
         }
         catch (Exception ex) { Log.Write("msg: " + ex.Message); }
+    }
+
+    // GSMTC 的调用会阻塞几百毫秒（Spotify 那边还可能更久），必须离开 UI 线程
+    private void MediaCommand(string cmd, JsonElement args)
+    {
+        _ = Task.Run(() =>
+        {
+            switch (cmd)
+            {
+                case "toggle": _media.TogglePlayPause(); break;
+                case "next": _media.Next(); break;
+                case "prev": _media.Prev(); break;
+                case "seek":
+                    if (args.ValueKind == JsonValueKind.Number) _media.Seek(args.GetDouble());
+                    break;
+            }
+        });
     }
 
     private void DoDrag(JsonElement args)
@@ -404,7 +524,10 @@ public sealed class MainForm : Form
         {
             var wa = Screen.FromControl(this).WorkingArea;
             var newTop = Top + Height - target;
-            newTop = Math.Min(Math.Max(newTop, wa.Top), wa.Bottom - target);
+            // 内容比工作区还高（小屏 / 面板全展开）时，别把顶部顶出屏幕：
+            // 播放器在最上面，看不见就等于没有
+            var lowest = Math.Max(wa.Top, wa.Bottom - target);
+            newTop = Math.Min(Math.Max(newTop, wa.Top), lowest);
             SetBounds(Left, newTop, Width, target);
             _cfg.Height = target;
             _cfg.Y = newTop;
@@ -501,6 +624,11 @@ public sealed class MainForm : Form
         {
             var st = _data.State;
             var mode = st.Mode ?? "codex";
+
+            // 上一张菜单此刻早已关闭，ModalMenuFilter 也不再引用它，这时才安全释放
+            try { _ctxMenu?.Dispose(); } catch { }
+            _ctxMenu = null;
+
             var menu = new ContextMenuStrip
             {
                 BackColor = MenuBack,
@@ -549,13 +677,29 @@ public sealed class MainForm : Form
             {
                 ShortcutKeyDisplayString = _hotkeyText
             });
+
+            var autoStart = new ToolStripMenuItem("开机自动启动")
+            {
+                Checked = Shortcuts.AutoStartEnabled(),
+                CheckOnClick = true
+            };
+            autoStart.Click += (_, _) =>
+            {
+                var on = Shortcuts.SetAutoStart(autoStart.Checked);
+                autoStart.Checked = on;
+                Log.Write("menu autostart=" + on);
+            };
+            menu.Items.Add(autoStart);
+            menu.Items.Add(new ToolStripMenuItem("创建桌面快捷方式", null, (_, _) => Shortcuts.CreateDesktop()));
+
             menu.Items.Add(new ToolStripMenuItem("隐藏面板", null, (_, _) => Hide()));
 
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("重启面板", null, (_, _) => RestartWebView("menu")));
             menu.Items.Add(new ToolStripMenuItem("退出", null, (_, _) => Close()));
 
-            menu.Closed += (_, _) => { try { menu.Dispose(); } catch { } };
+            // 这里绝对不能在 Closed 里同步 Dispose（见 _ctxMenu 字段注释），只做引用交接
+            _ctxMenu = menu;
 
             int x = 0, y = 0;
             if (args.ValueKind == JsonValueKind.Object)
@@ -746,6 +890,10 @@ public sealed class MainForm : Form
     heatReady: (window.__state && window.__state.heat && window.__state.heat.ready) || false,
     heatPeak: t('heatPeak'), heatTotal: t('heatTotal'), heatsum: t('heatsum'),
     moTotal: (window.__state && window.__state.heat && window.__state.heat.monthTotal) || 0,
+    moCost: (window.__state && window.__state.heat && window.__state.heat.monthCost) || 0,
+    moMix: (window.__state && window.__state.heat && window.__state.heat.monthModels) || [],
+    cmoTitle: document.getElementById('cmo') && document.getElementById('cmo').parentElement
+      ? document.getElementById('cmo').parentElement.title : null,
     moPts: (window.__state && window.__state.heat && window.__state.heat.month && window.__state.heat.month.length) || 0
   };
 })())";
@@ -788,44 +936,42 @@ public sealed class MainForm : Form
             await _core.ExecuteScriptAsync("document.querySelector('[data-mode=\\\"codex\\\"]').click()");
             await Task.Delay(800);
             await CaptureTo("final");
-            // 小人的两个特殊状态：冻住状态机再摆拍，否则 5 秒一次的状态推送会把它刷回去
+            // 链路自检：真点一下暂停再点回来（日志里应该看到两次 media toggle -> True）
+            await _core.ExecuteScriptAsync("document.getElementById('npPlay').click()");
+            await Task.Delay(1100);
+            await _core.ExecuteScriptAsync("document.getElementById('npPlay').click()");
+            await Task.Delay(1100);
+            // 播放器：真实播放态
+            await CaptureTo("np");
+            // 已收藏的样子（只改样式，不动真实曲目）
             await _core.ExecuteScriptAsync(
-                "window.__up=updatePet;updatePet=function(){};" +
-                "(function(){var p=document.getElementById('petStrip');p.dataset.state='done';p.dataset.accent='codex';" +
-                "document.getElementById('petSay').textContent='WORKBUDDY 交活了';" +
-                "document.getElementById('petSub').textContent='deepseek v4.1 flash';})()");
-            await Task.Delay(320);
-            await CaptureTo("petdone");
+                "(function(){var n=document.getElementById('np');n.dataset.liked='1';" +
+                "var f=document.getElementById('npFav');f.classList.add('pop');" +
+                "f.title='已加入「我喜欢」，再点一次取消';})()");
+            await Task.Delay(520);
+            await CaptureTo("npfav");
             await _core.ExecuteScriptAsync(
-                "(function(){var p=document.getElementById('petStrip');p.dataset.state='hug';" +
-                "document.getElementById('petSay').textContent='抱头…';" +
-                "document.getElementById('petSub').textContent='只剩 6%，省着点用';})()");
-            await Task.Delay(360);
-            await CaptureTo("pethug");
+                "(function(){document.getElementById('np').dataset.liked='0';" +
+                "document.getElementById('npFav').title='收藏到「我喜欢的音乐」';})()");
+            await Task.Delay(200);
+            // 冻住推送，免得 2 秒一次的状态把摆拍的暂停态冲回去
+            await _core.ExecuteScriptAsync("window.__npFreeze=true");
             await _core.ExecuteScriptAsync(
-                "(function(){var p=document.getElementById('petStrip');p.dataset.state='sleep';" +
-                "document.getElementById('petSay').textContent='打瞌睡了…';" +
-                "document.getElementById('petSub').textContent='凌晨 3 点还在跑';})()");
-            await Task.Delay(700);
-            await CaptureTo("petsleep");
-            await _core.ExecuteScriptAsync(
-                "(function(){var p=document.getElementById('petStrip');p.dataset.state='shy';" +
-                "document.getElementById('petSay').textContent='嘿嘿…';" +
-                "document.getElementById('petSub').textContent='已被摸头 7 次';})()");
+                "(function(){applyMedia({on:true,app:'Spotify',title:media.title,artist:media.artist," +
+                "album:media.album,pos:media.pos,dur:media.dur,playing:false,at:Date.now()});})()");
+            await Task.Delay(420);
+            await CaptureTo("nppause");
+            // 没有播放器在放东西时的样子
+            await _core.ExecuteScriptAsync("applyMedia({on:false,at:Date.now()})");
             await Task.Delay(340);
-            await CaptureTo("petshy");
-            await _core.ExecuteScriptAsync(
-                "(function(){var p=document.getElementById('petStrip');p.dataset.state='coffee';" +
-                "document.getElementById('petSay').textContent='喝口水吧';" +
-                "document.getElementById('petSub').textContent='已经连着跑了 2 小时';})()");
-            await Task.Delay(360);
-            await CaptureTo("petcoffee");
-            // 折起来只剩一行摘要
+            await CaptureTo("npnone");
+            // 还原成真实状态
+            await _core.ExecuteScriptAsync("window.__npFreeze=false;window.pet.getMedia().then(function(m){if(m)applyMedia(m);})");
+            await Task.Delay(700);
             await _core.ExecuteScriptAsync("document.getElementById('foldPet').click()");
             await Task.Delay(700);
-            await CaptureTo("petfold");
+            await CaptureTo("npfold");
             await _core.ExecuteScriptAsync("document.getElementById('foldPet').click()");
-            await _core.ExecuteScriptAsync("updatePet=window.__up");
             await Task.Delay(500);
             // 整卡折叠
             await _core.ExecuteScriptAsync("document.getElementById('collapse').click()");
@@ -881,6 +1027,7 @@ public sealed class MainForm : Form
     {
         Log.Write("closed, reason=" + e.CloseReason + ", stack=" + Environment.StackTrace);
         try { _cts.Cancel(); } catch { }
+        try { _media.Changed -= OnMediaChanged; } catch { }
         if (_hotkeyOk) { try { UnregisterHotKey(Handle, HotkeyToggle); } catch { } }
         _saveTimer.Stop();
         _cfg.X = Left;
@@ -889,5 +1036,7 @@ public sealed class MainForm : Form
         if (!Ephemeral) ConfigStore.Save(_cfg);
         _tray.Visible = false;
         _tray.Dispose();
+        try { _ctxMenu?.Dispose(); } catch { }
+        _ctxMenu = null;
     }
 }

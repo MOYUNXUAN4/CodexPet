@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-blue.svg)]()
 [![.NET](https://img.shields.io/badge/.NET-8.0--windows-purple.svg?logo=dotnet)](https://dotnet.microsoft.com/)
 [![WebView2](https://img.shields.io/badge/Renderer-Microsoft%20WebView2-green.svg)]()
-[![Version](https://img.shields.io/badge/Version-v2.1.0-brightgreen.svg)]()
+[![Version](https://img.shields.io/badge/Version-v2.2.0-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Author](https://img.shields.io/badge/Author-MOYUNXUAN-orange.svg)]()
 [![Email](https://img.shields.io/badge/Email-moyunxuan0%40gmail.com-blue?logo=gmail)](mailto:moyunxuan0@gmail.com)
@@ -20,7 +20,7 @@
 2. **Google Antigravity Language Server**
 3. **WorkBuddy AI Platform**
 
-从 5 小时滚动配额倒计时、30 天活跃热力图、本月 Token 消耗走势、会话实时调用 Skill，到生动可爱的交互式桌宠小人情绪反馈，CodexPet 为你一览无余地优雅呈现。
+从 5 小时滚动配额倒计时、30 天活跃热力图、本月 Token 消耗走势、会话实时调用 Skill，到一个 Spotify 风格的**正在播放播放器**（专辑封面 / 歌名 / 歌手 / 专辑 / 进度时间线 / 上一首 · 暂停 · 下一首 / 一键收藏），CodexPet 为你一览无余地优雅呈现。
 
 ---
 
@@ -36,28 +36,39 @@
 |:---:|:---:|
 | ![Activity Heatmap](docs/images/n1-heat.png) | ![Historical & Monthly Curve](docs/images/n1-curve.png) |
 
-### 3. 灵动桌宠伴侣情绪与交互 (Desktop Pet Companion)
-| 桌宠小人多种动态情绪状态 | 极简收起与极小占用模式 | 原生深色右键菜单 |
+### 3. 正在播放播放器 (Spotify-Style Now Playing)
+| 播放中（封面取色光晕 + 绿色进度条） | 已收藏（封面右下角的心变绿） | 已暂停 |
 |:---:|:---:|:---:|
-| ![Pet States 4-Up](docs/images/n2-pets-4up.png) | ![Collapsed Bar](docs/images/n1-collapsed.png) | ![Dark Menu](docs/images/n1-menu.png) |
+| ![Now Playing](docs/images/np-player.png) | ![Liked](docs/images/np-player-liked.png) | ![Paused](docs/images/np-player-paused.png) |
 
-| 额度告急 · 抱头预警 | 连续工作 · 递咖啡关怀 | 凌晨深夜 · 打瞌睡 | 摸头互动 · 害羞腮红 |
-|:---:|:---:|:---:|:---:|
-| ![Pet Hug](docs/images/n1-pethug.png) | ![Pet Coffee](docs/images/n1-petcoffee.png) | ![Pet Sleep](docs/images/n1-petsleep.png) | ![Pet Shy](docs/images/n1-petshy.png) |
+| 没有播放器在放 | 收起成一行 |
+|:---:|:---:|
+| ![Empty](docs/images/np-player-empty.png) | ![Folded](docs/images/np-player-fold.png) |
+
+| 极简收起模式 | 原生深色右键菜单 |
+|:---:|:---:|
+| ![Collapsed Bar](docs/images/n1-collapsed.png) | ![Dark Menu](docs/images/n1-menu.png) |
 
 ---
 
 ## ✨ 核心特性 (Key Features)
 
-### 1. 🤖 灵动交互式桌宠小人 (Interactive Desktop Pet)
-- **多状态情绪状态机**：
-  - **待命 / 闲置 (Idle)**：轻巧头部浮动动画，静默守护编程状态。
-  - **低配额抱头警戒 (Hug/Warning)**：当 5 小时配额跌至警戒线时抱头委屈，提示合理分配消耗。
-  - **深夜打瞌睡 (Sleep/ZZZ)**：凌晨时段自动开启打瞌睡动效与冒泡文字。
-  - **长时间工作递咖啡 (Coffee Break)**：连续工作超过 2 小时贴心递上热咖啡，关怀开发者健康。
-  - **点击互动害羞 (Shy/Petted)**：鼠标单击桌宠小人触发摸头动态、害羞腮红与逗趣随机台词。
-  - **任务完成喜悦反馈 (Done/Success)**：后台任务完成时同步欢呼。
-- **独立折叠面板**：支持将桌宠小人一键折叠收拢，只保留简要状态标签，空间随心定制。
+### 1. 🎵 Spotify 风格正在播放播放器 (Now Playing Card)
+- **零配置读取真实播放状态**：走 Windows 系统媒体会话（GSMTC），Spotify 桌面版开着就能读到，不需要登录、不需要 API Key、不用申请开发者应用。
+- **完整的一屏播放信息**：专辑封面（自动从封面取主色，给封面铺一层同色光晕）、歌名、歌手、专辑名，以及 `当前进度 / 总时长` 时间线。
+- **真·可用的控制按钮**：上一首 / 暂停·播放 / 下一首 全部落到系统媒体接口上，点完 Spotify 那边立刻响应；图标先本地乐观切换，不等回推。
+- **可拖动跳转的进度条**：点击进度条任意位置直接跳到该处（`TryChangePlaybackPositionAsync`），悬停时轨道变粗并浮出白色拖动点。
+- **丝滑的进度插值**：后端每 2 秒校准一次真实进度，中间由前端按快照时间戳插值跑，肉眼看不到跳格。
+- **点哪儿去哪儿**：点封面/歌名/空白处 → 打开 Spotify 里这首歌；点歌手 → 歌手页；点专辑（歌手下面那行）→ 专辑详情。
+  走 `spotify:` 协议直接唤起桌面客户端，不用浏览器中转；能查到真实 ID 时是 `spotify:artist:<id>` 精确落地，
+  查不到就退成 `spotify:search:artist:"名字"` 过滤搜索（详情见下）。
+- **一键收藏**：封面右下角的心形按钮，转按 Spotify 官方的 `Alt + Shift + B`，Spotify 自己的播放条会立刻出现绿色对勾；
+  按完把前台还给原来的窗口，不打断你打字。
+- **歌手 / 专辑的精确落地靠 MusicBrainz 反查**：GSMTC 只给纯文本，不给 Spotify 的 base62 ID。换歌时后台用
+  MusicBrainz 的 `url-rels` 找 `open.spotify.com/artist|album/xxx` 反推 ID，结果落盘缓存 30 天；查不到（冷门艺人常见）
+  就退回过滤搜索页 —— 永远不会点不动。
+- **自动挑选该显示的会话**：优先"正在播放"的会话（其中 Spotify 优先），没有播放中的才退回当前会话；浏览器播视频、网易云、QQ 音乐同样能读出来。
+- **独立折叠面板**：一键收起只留"正在播放 · 歌名 · 歌手"一行，空间随心定制；没有播放器在响时显示留白占位而不是报错。
 
 ### 2. 🌟 三合一全自动多平台实时同步 (Tri-Platform Synchronization)
 - **OpenAI Codex CLI 深度追踪**：
@@ -103,8 +114,14 @@
 |---|---|
 | **`Ctrl + Alt + P`** *(全局热键)* | **全局一键折叠 / 展开卡片**（无需激活窗口即可快速收起或唤出面板）。 |
 | **鼠标左键按住拖拽** | 按住卡片顶部或空白区域可在屏幕任意位置自由移动，自动持久化坐标。 |
-| **点击桌宠小人** | 触发摸头互动动画，切换害羞腮红与随机趣味对话。 |
-| **折叠桌宠小人** | 点击“桌宠”折叠栏，收起小人形象，仅保留紧凑状态标签。 |
+| **点击播放 / 暂停按钮** | 直接控制 Spotify 当前曲目的播放与暂停（图标即时切换）。 |
+| **点击上一首 / 下一首** | 切到当前曲目的上/下一首，Spotify 支持的按钮才可点，否则置灰。 |
+| **点击进度条** | 跳到该时间点（时间线是真实可拖的，不是装饰）。 |
+| **点击封面 / 歌名 / 行内空白** | 在 Spotify 里定位到这首歌（客户端没装则退回网页版搜索）。 |
+| **点击歌手名** | 打开歌手的 Spotify 页面（能查到 ID 时精确直达，否则落到该歌手的搜索结果）。 |
+| **点击专辑名** | 打开专辑详情页（同上，查不到 ID 时落到专辑搜索）。 |
+| **点击封面右下角的心** | 收藏到「我喜欢的音乐」（再点一次取消），对应 Spotify 的 `Alt + Shift + B`。 |
+| **折叠播放器** | 点击“正在播放”折叠栏，收起播放器，仅保留“歌名 · 歌手”一行摘要。 |
 | **顶部标签切换 (`Codex` / `AG` / `WB`)** | 瞬时切换三大监控源：Codex 模式、Antigravity 模式与 WorkBuddy 模式。 |
 | **顶部折叠按钮 (`▲` / `▼`)** | 将卡片收缩为极简顶栏模式，不遮挡任何工作区域。 |
 | **完成横幅单击** | 切换并聚焦至刚刚完成任务的对应 Agent 视图。 |

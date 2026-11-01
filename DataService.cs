@@ -1089,7 +1089,13 @@ public sealed class DataService
 
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
             var root = doc.RootElement;
-            JsonElement p = root.TryGetProperty("probabilities", out var pb) ? pb : default;
+            if (root.ValueKind != JsonValueKind.Object) { State.ForecastError = "BAD_JSON"; return; }
+            // probabilities 有时是 null（模型还没算出来），这时按「暂无数据」处理，别抛异常刷日志
+            JsonElement p = root.ValueKind == JsonValueKind.Object
+                             && root.TryGetProperty("probabilities", out var pb)
+                             && pb.ValueKind == JsonValueKind.Object
+                ? pb
+                : default;
 
             int? AsInt(double? v) => v.HasValue ? (int?)Math.Round(v.Value) : null;
 
@@ -1104,7 +1110,8 @@ public sealed class DataService
                 Cadence = root.TryGetProperty("cadence", out var cad) ? Num(cad, "recent_median_days") : null,
                 Confidence = Str(root, "confidence"),
                 UpdatedAt = Str(root, "updated_at"),
-                Tease = root.TryGetProperty("tease_signal", out var tz) && tz.TryGetProperty("post", out var post)
+                Tease = root.TryGetProperty("tease_signal", out var tz) && tz.ValueKind == JsonValueKind.Object
+                        && tz.TryGetProperty("post", out var post) && post.ValueKind == JsonValueKind.Object
                     ? new TeaseInfo { Quote = Str(post, "quote"), At = Str(post, "at") }
                     : null,
                 Hint = root.TryGetProperty("hint_copy", out var hc) ? Str(hc, "zh") : null
@@ -1117,6 +1124,8 @@ public sealed class DataService
         {
             State.ForecastError = "NETWORK";
             Log.Write("forecast: " + ex.Message);
+            // 失败也标记时间：否则主循环每 5 秒重试一次，日志会被同一条错误刷满
+            _lastForecast = DateTime.UtcNow.AddMinutes(-9);
         }
     }
 
@@ -1820,7 +1829,14 @@ public sealed class DataService
         {
             if (!File.Exists(AppPaths.HeatFile)) return;
             var d = JsonSerializer.Deserialize<HeatCacheFile>(File.ReadAllText(AppPaths.HeatFile), HeatJson);
-            if (d?.Files != null)
+            if (d?.Ver != 2)
+            {
+                // 旧缓存只统计了输出 token，口径变了必须重算
+                _heatCache.Clear();
+                Log.Write("heat cache version mismatch, rebuilding");
+                return;
+            }
+            if (d.Files != null)
                 foreach (var kv in d.Files)
                     if (kv.Value != null) _heatCache[kv.Key] = kv.Value;
             Log.Write($"heat cache loaded: {_heatCache.Count} files");
@@ -1833,7 +1849,7 @@ public sealed class DataService
         try
         {
             Directory.CreateDirectory(AppPaths.DataDir);
-            var d = new HeatCacheFile();
+            var d = new HeatCacheFile { Ver = 2 };
             foreach (var kv in _heatCache) d.Files[kv.Key] = kv.Value;
             File.WriteAllText(AppPaths.HeatFile, JsonSerializer.Serialize(d, HeatJson));
         }
@@ -1849,40 +1865,64 @@ public sealed class DataService
         {
             var today = DateTime.Today;
             var day0 = today.AddDays(-(HeatDayCount - 1));
-            var cutoff = new DateTimeOffset(day0).ToUnixTimeMilliseconds();
+
+            // 本月从 5 号算起；万一 5 号早于 30 天窗口，就把扫描 cutoff 往前挪，别把月初那几天漏掉
+            var nowLocal = DateTime.Now;
+            var monthStart = new DateTime(nowLocal.Year, nowLocal.Month, 5);
+            if (nowLocal.Date < monthStart) monthStart = monthStart.AddMonths(-1);
+
+            var scanFrom = monthStart < day0 ? monthStart : day0;
+            var cutoff = new DateTimeOffset(scanFrom).ToUnixTimeMilliseconds();
 
             var hours = new Dictionary<long, double>(4096);
+            var dayModels = new Dictionary<string, long[]>(StringComparer.Ordinal);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var parsed = 0;
 
-            if (Directory.Exists(AppPaths.SessionsDir))
+            void Merge(HeatScan s)
             {
-                foreach (var f in Directory.EnumerateFiles(AppPaths.SessionsDir, "*.jsonl", SearchOption.AllDirectories))
+                foreach (var kv in s.Hours)
+                    hours[kv.Key] = hours.TryGetValue(kv.Key, out var old) ? old + kv.Value : kv.Value;
+                MergeModels(dayModels, s.DayModels);
+            }
+
+            // 活跃会话 + 归档会话（.jsonl.zst）都要扫，否则月初那几天会凭空消失
+            foreach (var dir in new[] { AppPaths.SessionsDir, AppPaths.ArchivedDir })
+            {
+                if (!Directory.Exists(dir)) continue;
+                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
                 {
+                    if (!f.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase) &&
+                        !f.EndsWith(".jsonl.zst", StringComparison.OrdinalIgnoreCase)) continue;
+                    var isZst = f.EndsWith(".zst", StringComparison.OrdinalIgnoreCase);
                     FileInfo fi;
                     try { fi = new FileInfo(f); } catch { continue; }
-                    if (!fi.Exists || fi.LastWriteTime < day0) continue;   // 30 天前就不再动的会话不可能有窗口内的事件
+                    if (!fi.Exists) continue;
+                    // 归档包的 mtime 是打包时间，不可靠；这类文件直接按逐事件的 cutoff 过滤
+                    if (!isZst && fi.LastWriteTime < scanFrom) continue;   // 窗口前就不再动的会话不可能有窗口内的事件
                     seen.Add(f);
 
-                    if (_heatCache.TryGetValue(f, out var hit) && hit.Size == fi.Length &&
+                    if (_heatCache.TryGetValue(f, out var hit) && hit.Ver == 3 && hit.Size == fi.Length &&
                         hit.Mtime != 0 && Math.Abs(hit.Mtime - fi.LastWriteTimeUtc.Ticks) < 1)
                     {
                         foreach (var kv in hit.Hours)
                             if (long.TryParse(kv.Key, out var hk) && hk >= cutoff)
                                 hours[hk] = hours.TryGetValue(hk, out var old) ? old + kv.Value : kv.Value;
+                        MergeModels(dayModels, hit.Models);
                         continue;
                     }
 
-                    var map = ScanHeatFile(f, cutoff);
+                    var scan = ScanHeatFile(f, cutoff);
                     parsed++;
                     _heatCache[f] = new HeatCacheEntry
                     {
+                        Ver = 3,
                         Size = fi.Length,
                         Mtime = fi.LastWriteTimeUtc.Ticks,
-                        Hours = map.ToDictionary(kv => kv.Key.ToString(CultureInfo.InvariantCulture), kv => kv.Value)
+                        Hours = scan.Hours.ToDictionary(kv => kv.Key.ToString(CultureInfo.InvariantCulture), kv => kv.Value),
+                        Models = scan.DayModels
                     };
-                    foreach (var kv in map)
-                        hours[kv.Key] = hours.TryGetValue(kv.Key, out var old) ? old + kv.Value : kv.Value;
+                    Merge(scan);
                 }
             }
 
@@ -1908,11 +1948,7 @@ public sealed class DataService
                 days.Add($"{day.Month:00}-{day.Day:00}");
             }
 
-            // 本月（5 号起）累计 token：直接用小时桶累加，热力图本来就覆盖到 29 天前
-            var nowLocal = DateTime.Now;
-            var monthStart = new DateTime(nowLocal.Year, nowLocal.Month, 5);
-            if (nowLocal.Date < monthStart) monthStart = monthStart.AddMonths(-1);
-            if (monthStart < day0) monthStart = day0;
+            // 本月（5 号起）累计 token：直接用小时桶累加
             var monthPts = new List<double[]>();
             var acc = 0.0;
             for (var day = monthStart.Date; day <= nowLocal.Date; day = day.AddDays(1))
@@ -1930,12 +1966,55 @@ public sealed class DataService
             }
             var monthTotal = (int)Math.Round(acc / 1000.0);
 
+            // 本月成本：按每个模型的官方价，把「未命中输入 / 缓存输入 / 缓存写入 / 输出」分别计价
+            long mIn = 0, mCached = 0, mOut = 0;
+            var costUsd = 0.0;
+            var mStartKey = monthStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var modelsUsed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var perModel = new Dictionary<string, long[]>(StringComparer.OrdinalIgnoreCase);   // 模型 -> [输入, 缓存, 缓存写入, 输出]
+            foreach (var kv in dayModels)
+            {
+                var bar = kv.Key.IndexOf('|');
+                if (bar <= 0) continue;
+                var dayKey = kv.Key.Substring(0, bar);
+                if (string.CompareOrdinal(dayKey, mStartKey) < 0) continue;   // 月初之前的不算进本月
+                var model = kv.Key.Substring(bar + 1);
+                var t = kv.Value;
+                mIn += t[0];
+                mCached += t[1];
+                mOut += t[3];
+                costUsd += TokenCost(model, t[0], t[1], t[2], t[3]);
+                modelsUsed.Add(model);
+                if (!perModel.TryGetValue(model, out var pm)) { pm = new long[4]; perModel[model] = pm; }
+                for (var i = 0; i < 4; i++) pm[i] += t[i];
+            }
+
+            // 本月用量构成：按花费排序，方便一眼看出钱花在哪个型号上
+            var mix = perModel
+                .Select(kv => new ModelCost
+                {
+                    Name = kv.Key,
+                    Label = ModelLabel(kv.Key),
+                    Tok = kv.Value[0] + kv.Value[3],
+                    Cost = Math.Round(TokenCost(kv.Key, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3]), 2),
+                    Priced = PriceTable.ContainsKey(kv.Key)
+                })
+                .OrderByDescending(x => x.Cost)
+                .ToList();
+            foreach (var x in mix) x.Share = costUsd > 0 ? Math.Round(x.Cost / costUsd, 4) : 0;
+
             var payload = new HeatPayload
             {
                 Grid = grid,
                 Month = monthPts,
                 MonthTotal = monthTotal,
                 MonthStart = new DateTimeOffset(monthStart.Date).ToUnixTimeMilliseconds(),
+                MonthIn = mIn,
+                MonthCached = mCached,
+                MonthOut = mOut,
+                MonthCost = Math.Round(costUsd, 2),
+                MonthModels = mix,
+                PriceNote = PriceNote(mix),
                 Days = days,
                 Max = max,
                 Total = total,
@@ -1948,28 +2027,132 @@ public sealed class DataService
             lock (Sync) State.Heat = payload;
             SaveHeatCache();
             _lastHeatBuild = DateTime.UtcNow;
-            Log.Write($"heat built: parsed={parsed} cached={_heatCache.Count} max={max}k total={total}k in {sw.ElapsedMilliseconds}ms");
+            Log.Write($"heat built: parsed={parsed} cached={_heatCache.Count} max={max}k total={total}k month={monthTotal}k in={mIn} cached={mCached} out={mOut} cost=${costUsd:0.00} mix=" +
+                string.Join(", ", mix.Select(x => $"{x.Name}={x.Tok / 1_000_000.0:0.0}M/${x.Cost:0.0}")) +
+                $" in {sw.ElapsedMilliseconds}ms");
             Raise();
         }
         catch (Exception ex) { Log.Write("heat: " + ex.Message); }
         finally { _heatBuilding = false; }
     }
 
+    private static void MergeModels(Dictionary<string, long[]> into, Dictionary<string, long[]> from)
+    {
+        foreach (var kv in from)
+        {
+            if (!into.TryGetValue(kv.Key, out var arr)) { arr = new long[4]; into[kv.Key] = arr; }
+            for (var i = 0; i < 4; i++) arr[i] += kv.Value[i];
+        }
+    }
+
+    // gpt-6.1-sol 官方标准价（美元 / 百万 token），2026-09-29 上线
+    // 官方标准价（美元 / 百万 token）：[未命中输入, 缓存输入, 缓存写入, 输出]
+    // 6.1 Terra 于 2026-10-26 上线，$1 / $0.05 / $5，正好是 Sol 的一半。
+    private static readonly Dictionary<string, double[]> PriceTable = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["gpt-6.1-sol"] = new[] { 2.00, 0.10, 2.50, 10.00 },
+        ["gpt-6.1-terra"] = new[] { 1.00, 0.05, 1.25, 5.00 },
+        ["gpt-6-luna"] = new[] { 0.10, 0.01, 0.125, 0.50 },
+        ["gpt-6-sol"] = new[] { 2.00, 0.20, 2.50, 10.00 },
+        ["gpt-5.6-sol"] = new[] { 4.00, 0.40, 5.00, 20.00 },
+        ["gpt-5.6-terra"] = new[] { 2.00, 0.20, 2.50, 12.00 },
+        ["gpt-5.6-luna"] = new[] { 0.20, 0.02, 0.25, 1.20 },
+        ["gpt-6-astra"] = new[] { 10.00, 1.00, 12.50, 50.00 },
+        // codex 的自动代码审查模型，官方没有单独挂牌，按 Sol 档计
+        ["codex-auto-review"] = new[] { 2.00, 0.10, 2.50, 10.00 },
+    };
+
+    private static double TokenCost(string model, long input, long cached, long write, long output)
+    {
+        if (!PriceTable.TryGetValue(model ?? "", out var p)) p = PriceTable["gpt-6.1-sol"];
+        var fresh = input - cached - write;
+        if (fresh < 0) fresh = 0;
+        return (fresh * p[0] + cached * p[1] + write * p[2] + output * p[3]) / 1_000_000.0;
+    }
+
+    private static string ModelLabel(string model) => model switch
+    {
+        "gpt-6.1-sol" => "6.1 Sol",
+        "gpt-6.1-terra" => "6.1 Terra",
+        "gpt-6-luna" => "6 Luna",
+        "gpt-6-sol" => "6 Sol",
+        "gpt-5.6-sol" => "5.6 Sol",
+        "gpt-5.6-terra" => "5.6 Terra",
+        "gpt-5.6-luna" => "5.6 Luna",
+        "gpt-6-astra" => "6 Astra",
+        "codex-auto-review" => "Code Review",
+        "unknown" => "未知",
+        _ => model ?? "未知"
+    };
+
+    // 悬停提示里的计价说明：按实际用到的型号逐条列官方价，没挂牌的标注「按 Sol 估」
+    private static string PriceNote(List<ModelCost> mix)
+    {
+        var parts = mix
+            .Where(x => x.Tok > 0)
+            .OrderByDescending(x => x.Cost)
+            .Select(x => PriceTable.TryGetValue(x.Name, out var p)
+                ? $"{x.Label} ${p[0]:0.##}/${p[1]:0.##}/${p[3]:0.##}"
+                : $"{x.Label} 无官方价，按 Sol 估")
+            .Take(4)
+            .ToList();
+        if (parts.Count == 0) return "gpt-6.1-sol 官方价 $2/$0.10/$10 per M";
+        return string.Join("，", parts) + "（输入/缓存/输出，美元/百万 token）";
+    }
+
     private static string FmtK(int k) => k >= 1000
         ? (k / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + "M"
         : k + "k";
 
-    // 一个 rollout 里每个 token_count 事件带的是「本轮消耗」，按本地小时累加就是生成量
-    private static Dictionary<long, double> ScanHeatFile(string path, long cutoff)
+    // 一个 rollout 里每个 token_count 事件带的是「本轮消耗」，按本地小时累加就是真实用量。
+    // 以前只累加 output_tokens，所以「本月累计」比实际小两个数量级——输入才是大头，而且几乎都是缓存命中。
+    private sealed class HeatScan
     {
-        var map = new Dictionary<long, double>();
+        public readonly Dictionary<long, double> Hours = new();          // 本地小时起点(ms) -> 全部 token
+        public readonly Dictionary<string, long[]> DayModels = new();    // "yyyy-MM-dd|model" -> [输入, 缓存输入, 缓存写入, 输出]
+    }
+
+    // 只认这两个事件里的 model：turn_context 是每回合开始时写的（权威），
+    // thread_settings_applied 是切换模型后写的。其他位置的 model 字段都不可信。
+    private static string TurnModelOf(string line)
+    {
+        if (line.IndexOf("turn_context", StringComparison.Ordinal) < 0 &&
+            line.IndexOf("thread_settings_applied", StringComparison.Ordinal) < 0) return null;
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
-            using var sr = new StreamReader(fs, Encoding.UTF8, false, 1 << 16);
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("payload", out var pl) || pl.ValueKind != JsonValueKind.Object) return null;
+            var type = Str(root, "type");
+            if (type == "turn_context") return Str(pl, "model");
+            if (Str(pl, "type") == "thread_settings_applied" &&
+                pl.TryGetProperty("thread_settings", out var ts) && ts.ValueKind == JsonValueKind.Object)
+                return Str(ts, "model");
+        }
+        catch { }
+        return null;
+    }
+
+    private static HeatScan ScanHeatFile(string path, long cutoff)
+    {
+        var res = new HeatScan();
+        var model = "unknown";
+        try
+        {
+            using var raw = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
+            using var stream = path.EndsWith(".zst", StringComparison.OrdinalIgnoreCase)
+                ? (Stream)new ZstdSharp.DecompressionStream(raw)
+                : raw;
+            using var sr = new StreamReader(stream, Encoding.UTF8, false, 1 << 16);
             string line;
             while ((line = sr.ReadLine()) != null)
             {
+                // 模型只能从 turn_context / thread_settings_applied 里取。
+                // 以前是「行里最后一个 "model":」——但同一行里还有 collaboration_mode.model、
+                // 子代理的 model 覆盖、工具 schema 里的 model 字段，结果把主线程几百 M token 算到了 Luna 头上。
+                var m = TurnModelOf(line);
+                if (m != null) model = m;
+
                 if (line.IndexOf("\"token_count\"", StringComparison.Ordinal) < 0) continue;
                 if (line.IndexOf("\"last_token_usage\"", StringComparison.Ordinal) < 0) continue;
                 try
@@ -1979,18 +2162,35 @@ public sealed class DataService
                     if (!root.TryGetProperty("payload", out var pl)) continue;
                     if (!pl.TryGetProperty("info", out var info)) continue;
                     if (!info.TryGetProperty("last_token_usage", out var lu)) continue;
-                    var tok = Num(lu, "output_tokens") ?? 0;
-                    if (tok <= 0) continue;
+
+                    var inp = Num(lu, "input_tokens") ?? 0;
+                    var cached = Num(lu, "cached_input_tokens") ?? 0;
+                    var write = Num(lu, "cache_write_input_tokens") ?? 0;
+                    var outTok = Num(lu, "output_tokens") ?? 0;
+                    var all = Num(lu, "total_tokens") ?? (inp + outTok);
+                    if (all <= 0) continue;
+
                     var ms = TsOf(root);
                     if (ms < cutoff || ms <= 0) continue;
                     var lt = DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime();
                     var key = new DateTimeOffset(lt.Year, lt.Month, lt.Day, lt.Hour, 0, 0, lt.Offset).ToUnixTimeMilliseconds();
-                    map[key] = map.TryGetValue(key, out var old) ? old + tok : tok;
+                    res.Hours[key] = res.Hours.TryGetValue(key, out var old) ? old + all : all;
+
+                    var dk = lt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "|" + model;
+                    if (!res.DayModels.TryGetValue(dk, out var acc))
+                    {
+                        acc = new long[4];
+                        res.DayModels[dk] = acc;
+                    }
+                    acc[0] += (long)inp;
+                    acc[1] += (long)cached;
+                    acc[2] += (long)write;
+                    acc[3] += (long)outTok;
                 }
                 catch { }
             }
         }
         catch (Exception ex) { Log.Write("heat scan " + Path.GetFileName(path) + ": " + ex.Message); }
-        return map;
+        return res;
     }
 }
